@@ -1,0 +1,101 @@
+menu "ENV-AQ-01 Project Configuration"
+
+    menu "WiFi"
+        config WIFI_SSID
+            string "WiFi SSID"
+            default "MySSID"
+            help
+                SSID của mạng WiFi cần kết nối.
+
+        config WIFI_PASSWORD
+            string "WiFi Password"
+            default "MyPassword"
+            help
+                Mật khẩu WiFi.
+    endmenu
+
+    menu "MQTT"
+        config MQTT_BROKER_URL
+            string "MQTT Broker URL"
+            default "mqtt://broker.hivemq.com:1883"
+            help
+                URL của MQTT broker. Ví dụ: mqtt://192.168.1.100:1883
+
+        config MQTT_TOPIC
+            string "MQTT Publish Topic"
+            default "env/aq01/data"
+            help
+                Topic để publish dữ liệu cảm biến.
+
+        config MQTT_TOPIC_ALERT
+            string "MQTT Alert Topic"
+            default "env/aq01/alert"
+            help
+                Topic để publish cảnh báo (calib_alert, threshold breach).
+    endmenu
+
+    menu "AQI Thresholds (µg/m³ PM2.5)"
+        config AQI_GOOD_MAX
+            int "PM2.5 max for AQI Good (µg/m³)"
+            default 12
+            range 0 500
+
+        config AQI_MODERATE_MAX
+            int "PM2.5 max for AQI Moderate"
+            default 35
+            range 0 500
+
+        config AQI_POOR_MAX
+            int "PM2.5 max for AQI Poor"
+            default 55
+            range 0 500
+
+        config AQI_BAD_MAX
+            int "PM2.5 max for AQI Bad"
+            default 150
+            range 0 500
+
+        config AQI_VERY_BAD_MAX
+            int "PM2.5 max for AQI Very Bad"
+            default 250
+            range 0 500
+    endmenu
+
+    menu "Alert Thresholds"
+        config ALERT_CO2_PPM
+            int "CO2 alert threshold (ppm)"
+            default 1000
+            range 400 5000
+            help
+                Ngưỡng CO2 để phát cảnh báo buzzer/LED.
+
+        config ALERT_PM25_UGM3
+            int "PM2.5 alert threshold (µg/m³)"
+            default 55
+            range 0 500
+    endmenu
+
+    menu "NTP"
+        config NTP_SERVER_URL
+            string "NTP Server URL"
+            default "pool.ntp.org"
+            help
+                URL của NTP server để đồng bộ thời gian thực (UTC).
+                Ví dụ: pool.ntp.org, vn.pool.ntp.org, time.google.com
+    endmenu
+
+    menu "Sensor Timing"
+        config SENSOR_READ_INTERVAL_MS
+            int "Sensor read interval (ms)"
+            default 2000
+            range 500 60000
+            help
+                Chu kỳ đọc cảm biến tính theo milliseconds.
+
+        config DISPLAY_UPDATE_INTERVAL_MS
+            int "Display update interval (ms)"
+            default 3000
+            range 1000 10000
+    endmenu
+
+endmenu

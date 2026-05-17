@@ -1,0 +1,31 @@
+idf_component_register(
+    SRCS
+        "SensorManager.cpp"
+        "Filters.cpp"
+        "DataFusion.cpp"
+        "DisplayManager.cpp"
+        "NetworkManager.cpp"
+        "StorageHelper.cpp"
+        "main.cpp"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        esp_driver_i2c
+        esp_driver_uart
+        esp_driver_gpio
+        esp_driver_spi
+        esp_adc
+        esp_wifi
+        esp_netif
+        esp_event
+        mqtt
+        nvs_flash
+        fatfs
+        vfs
+        esp_timer
+        cjson
+        lwip
+        freertos
+        bme680      # esp-idf-lib/bme680 (driver chính cho cảm biến T/RH/P/Gas)
+        i2cdev      # esp-idf-lib/i2cdev — cần cho i2cdev_init() chia sẻ bus I2C
+)

@@ -1,0 +1,26 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "espidf",
+      "name": "ESP-IDF Debug (ESP-Prog)",
+      "request": "launch",
+      "openOcdConfigFiles": [
+        "interface/esp_prog.cfg",
+        "target/esp32.cfg"
+      ],
+      "flashingType": "openOCD",
+      "sessionID": "core0"
+    },
+    {
+      "type": "espidf",
+      "name": "ESP-IDF Debug (WROVER-KIT)",
+      "request": "launch",
+      "openOcdConfigFiles": [
+        "board/esp32-wrover-kit-3.3v.cfg"
+      ],
+      "flashingType": "openOCD",
+      "sessionID": "core0"
+    }
+  ]
+}

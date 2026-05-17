@@ -1,0 +1,356 @@
+// ============================================================
+// NetworkManager.cpp
+//   Wi-Fi STA + MQTT (espressif/mqtt) + SNTP + cJSON payload.
+//
+//   Toàn bộ event xử lý theo mô hình event-driven của esp_event:
+//   không có polling loop — đáp ứng NFR công suất 2W và non-blocking.
+//   ESP32 dual-core: event callback có thể chạy trên core khác so với
+//   taskNetwork → dùng std::atomic cho các flag trạng thái.
+// ============================================================
+
+#include "NetworkManager.hpp"
+
+#include "esp_log.h"
+#include "esp_wifi.h"
+#include "esp_netif.h"
+#include "esp_netif_sntp.h"  // esp_netif_sntp_init/deinit, esp_sntp_config_t
+#include "esp_event.h"
+#include "mqtt_client.h"
+#include "cJSON.h"
+
+#include <cstring>
+#include <cstdio>
+
+static const char *TAG = "NetworkManager";
+
+// Bit cờ event group — cho phép task khác block chờ kết nối (OTA, test)
+static constexpr EventBits_t BIT_WIFI_OK = BIT0;
+static constexpr EventBits_t BIT_MQTT_OK = BIT1;
+
+// File-scope: SNTP là singleton trong ESP-IDF, flag này cũng là singleton.
+// Được set trong sntpSyncCb() (static) → không thể dùng instance member.
+static std::atomic<bool> s_sntp_synced{false};
+
+// ============================================================
+// Constructor / Destructor
+// ============================================================
+NetworkManager::NetworkManager()
+    : netif_(nullptr),
+      mqtt_(nullptr),
+      evt_group_(nullptr),
+      wifi_connected_(false),
+      mqtt_connected_(false),
+      mqtt_client_id_{} {}  // zero-init toàn bộ client ID buffer
+
+NetworkManager::~NetworkManager() {
+    if (mqtt_) {
+        esp_mqtt_client_stop(mqtt_);
+        esp_mqtt_client_destroy(mqtt_);
+    }
+    if (evt_group_) {
+        vEventGroupDelete(evt_group_);
+    }
+    esp_netif_sntp_deinit();  // giải phóng SNTP handle (bắt cặp với initSntp)
+    // Wi-Fi & netif không tear-down ở dtor — chúng là singleton hệ thống;
+    // lifecycle thuộc app_main, không phải NetworkManager.
+}
+
+// ============================================================
+// Public init
+// ============================================================
+esp_err_t NetworkManager::init() {
+    evt_group_ = xEventGroupCreate();
+    if (!evt_group_) return ESP_ERR_NO_MEM;
+
+    // esp_netif_init() và default event loop là singleton hệ thống —
+    // gọi lần 2 trả ESP_ERR_INVALID_STATE → bỏ qua an toàn.
+    esp_err_t err = esp_netif_init();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) return err;
+
+    err = esp_event_loop_create_default();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) return err;
+
+    err = initWifi();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Wi-Fi init failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    err = initMqtt();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "MQTT init failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    err = initSntp();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "SNTP init failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    ESP_LOGI(TAG, "NetworkManager ready — SSID='%s' broker='%s' ntp='%s'",
+             Cfg::WIFI_SSID, Cfg::MQTT_BROKER_URL, Cfg::NTP_SERVER_URL);
+    return ESP_OK;
+}
+
+// ============================================================
+// Wi-Fi STA
+// ============================================================
+esp_err_t NetworkManager::initWifi() {
+    netif_ = esp_netif_create_default_wifi_sta();
+    if (!netif_) return ESP_FAIL;
+
+    wifi_init_config_t init_cfg = WIFI_INIT_CONFIG_DEFAULT();
+    esp_err_t err = esp_wifi_init(&init_cfg);
+    if (err != ESP_OK) return err;
+
+    // Đăng ký handler — `this` truyền qua `arg` để static handler truy cập instance
+    err = esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
+                                              &NetworkManager::wifiEventHandler,
+                                              this, nullptr);
+    if (err != ESP_OK) return err;
+
+    err = esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
+                                              &NetworkManager::ipEventHandler,
+                                              this, nullptr);
+    if (err != ESP_OK) return err;
+
+    wifi_config_t wifi_cfg = {};
+    std::strncpy(reinterpret_cast<char *>(wifi_cfg.sta.ssid),
+                 Cfg::WIFI_SSID, sizeof(wifi_cfg.sta.ssid) - 1);
+    std::strncpy(reinterpret_cast<char *>(wifi_cfg.sta.password),
+                 Cfg::WIFI_PASSWORD, sizeof(wifi_cfg.sta.password) - 1);
+    // WPA2-PSK minimum: chặn kết nối vào AP không mã hoá / WEP yếu
+    wifi_cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+
+    err = esp_wifi_set_storage(WIFI_STORAGE_RAM);  // tránh ghi NVS mỗi lần connect
+    if (err != ESP_OK) return err;
+    err = esp_wifi_set_mode(WIFI_MODE_STA);
+    if (err != ESP_OK) return err;
+    err = esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg);
+    if (err != ESP_OK) return err;
+    err = esp_wifi_start();  // phát WIFI_EVENT_STA_START → handler gọi connect()
+    if (err != ESP_OK) return err;
+
+    // NFR công suất 2W: bật Modem-sleep — PHẢI gọi sau esp_wifi_start()
+    esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+    return ESP_OK;
+}
+
+// ============================================================
+// MQTT
+// ============================================================
+esp_err_t NetworkManager::initMqtt() {
+    // Tạo client ID = "aq01_<MAC WiFi STA>" — duy nhất mỗi thiết bị.
+    // Tránh broker disconnect client cũ khi nhiều trạm kết nối cùng broker.
+    // esp_wifi_get_mac() an toàn sau esp_wifi_init() (không cần wifi_start).
+    uint8_t mac[6] = {};
+    esp_wifi_get_mac(WIFI_IF_STA, mac);
+    snprintf(mqtt_client_id_, sizeof(mqtt_client_id_),
+             "aq01_%02x%02x%02x%02x%02x%02x",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+    esp_mqtt_client_config_t cfg = {};
+    cfg.broker.address.uri    = Cfg::MQTT_BROKER_URL;
+    cfg.credentials.client_id = mqtt_client_id_;  // trỏ vào member — vòng đời hợp lệ
+    // Auto-reconnect mặc định 10s — đủ cho NFR cảnh báo <3s sau khi kết nối lại
+    cfg.network.disable_auto_reconnect = false;
+
+    mqtt_ = esp_mqtt_client_init(&cfg);
+    if (!mqtt_) return ESP_FAIL;
+
+    esp_err_t err = esp_mqtt_client_register_event(
+        mqtt_,
+        static_cast<esp_mqtt_event_id_t>(ESP_EVENT_ANY_ID),
+        &NetworkManager::mqttEventHandler,
+        this);
+    if (err != ESP_OK) return err;
+
+    // start() không block — MQTT_EVENT_CONNECTED phát khi broker chấp nhận.
+    // Nếu Wi-Fi chưa có IP, client tự retry → không cần xử lý thêm.
+    return esp_mqtt_client_start(mqtt_);
+}
+
+// ============================================================
+// SNTP
+// ============================================================
+esp_err_t NetworkManager::initSntp() {
+    // esp_netif_sntp (v5.1+): tự đồng bộ khi mạng sẵn sàng, retry theo
+    // CONFIG_LWIP_SNTP_UPDATE_DELAY (mặc định 1 giờ). Không cần trigger thủ công.
+    esp_sntp_config_t cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG(Cfg::NTP_SERVER_URL);
+    cfg.sync_cb = &NetworkManager::sntpSyncCb;  // callback báo khi đồng bộ xong
+
+    esp_err_t err = esp_netif_sntp_init(&cfg);
+    if (err == ESP_ERR_INVALID_STATE) {
+        // SNTP đã được init trước đó (singleton) — không phải lỗi
+        ESP_LOGW(TAG, "SNTP already initialized");
+        return ESP_OK;
+    }
+    if (err != ESP_OK) return err;
+
+    ESP_LOGI(TAG, "SNTP init OK — server='%s'", Cfg::NTP_SERVER_URL);
+    return ESP_OK;
+}
+
+// ============================================================
+// Public API
+// ============================================================
+esp_err_t NetworkManager::publishData(const AirData &data) {
+    if (!mqtt_connected_.load()) return ESP_ERR_INVALID_STATE;
+
+    char json[Cfg::MQTT_JSON_BUF_LEN];
+    size_t n = buildJson(data, json, sizeof(json));
+    if (n == 0) return ESP_FAIL;
+
+    // QoS 1: broker xác nhận ít nhất 1 lần nhận — phù hợp dữ liệu môi trường
+    int msg_id = esp_mqtt_client_publish(mqtt_, Cfg::MQTT_TOPIC_DATA,
+                                         json, static_cast<int>(n), 1, 0);
+    return (msg_id >= 0) ? ESP_OK : ESP_FAIL;
+}
+
+esp_err_t NetworkManager::publishAlert(const AirData &data, const char *reason) {
+    if (!mqtt_connected_.load()) return ESP_ERR_INVALID_STATE;
+
+    char json[Cfg::MQTT_JSON_BUF_LEN];
+    size_t n = buildJson(data, json, sizeof(json), reason);
+    if (n == 0) return ESP_FAIL;
+
+    int msg_id = esp_mqtt_client_publish(mqtt_, Cfg::MQTT_TOPIC_ALERT,
+                                         json, static_cast<int>(n), 1, 0);
+    return (msg_id >= 0) ? ESP_OK : ESP_FAIL;
+}
+
+bool NetworkManager::isConnected() const {
+    return wifi_connected_.load() && mqtt_connected_.load();
+}
+
+bool NetworkManager::isTimeSynced() const {
+    return s_sntp_synced.load();  // true sau khi sntpSyncCb() được gọi lần đầu
+}
+
+// ============================================================
+// Event handlers
+// ============================================================
+void NetworkManager::wifiEventHandler(void *arg, esp_event_base_t,
+                                      int32_t id, void *event_data) {
+    auto *self = static_cast<NetworkManager *>(arg);
+    switch (id) {
+        case WIFI_EVENT_STA_START:
+            ESP_LOGI(TAG, "Wi-Fi start — connecting to '%s'...", Cfg::WIFI_SSID);
+            esp_wifi_connect();
+            break;
+
+        case WIFI_EVENT_STA_DISCONNECTED: {
+            // Log reason giúp phân biệt: AUTH_FAIL (sai pass) vs AP_NOT_FOUND vs timeout
+            auto *evt = static_cast<wifi_event_sta_disconnected_t *>(event_data);
+            self->wifi_connected_.store(false);
+            xEventGroupClearBits(self->evt_group_, BIT_WIFI_OK);
+            ESP_LOGW(TAG, "Wi-Fi disconnected (reason=%d) — retry", (int)evt->reason);
+            esp_wifi_connect();  // reconnect không block; driver tự retry
+            break;
+        }
+
+        default: break;
+    }
+}
+
+void NetworkManager::ipEventHandler(void *arg, esp_event_base_t,
+                                    int32_t id, void *event_data) {
+    auto *self = static_cast<NetworkManager *>(arg);
+    if (id == IP_EVENT_STA_GOT_IP) {
+        auto *evt = static_cast<ip_event_got_ip_t *>(event_data);
+        ESP_LOGI(TAG, "Got IP " IPSTR, IP2STR(&evt->ip_info.ip));
+        self->wifi_connected_.store(true);
+        xEventGroupSetBits(self->evt_group_, BIT_WIFI_OK);
+        // SNTP tự bắt đầu sync khi mạng available — esp_netif_sntp xử lý nội bộ
+    }
+}
+
+void NetworkManager::mqttEventHandler(void *arg, esp_event_base_t,
+                                      int32_t id, void *event_data) {
+    auto *self = static_cast<NetworkManager *>(arg);
+    auto *evt  = static_cast<esp_mqtt_event_handle_t>(event_data);
+    switch (static_cast<esp_mqtt_event_id_t>(id)) {
+        case MQTT_EVENT_CONNECTED:
+            self->mqtt_connected_.store(true);
+            xEventGroupSetBits(self->evt_group_, BIT_MQTT_OK);
+            // Log client ID để xác nhận đúng thiết bị kết nối trên broker
+            ESP_LOGI(TAG, "MQTT connected (client_id='%s')", self->mqtt_client_id_);
+            break;
+
+        case MQTT_EVENT_DISCONNECTED:
+            self->mqtt_connected_.store(false);
+            xEventGroupClearBits(self->evt_group_, BIT_MQTT_OK);
+            ESP_LOGW(TAG, "MQTT disconnected — client tự reconnect");
+            break;
+
+        case MQTT_EVENT_ERROR:
+            if (evt && evt->error_handle) {
+                // error_type: 0=TCP transport, 1=PAHO, 2=TLS, 3=DNS
+                ESP_LOGE(TAG, "MQTT error type=%d", (int)evt->error_handle->error_type);
+            }
+            break;
+
+        default: break;
+    }
+}
+
+// ============================================================
+// SNTP sync callback
+// ============================================================
+void NetworkManager::sntpSyncCb(struct timeval *) {
+    // Được lwip gọi một lần khi sync xong — set flag vĩnh viễn.
+    // time(NULL) từ đây trở đi trả Unix timestamp UTC hợp lệ.
+    s_sntp_synced.store(true);
+    ESP_LOGI(TAG, "SNTP synced — Unix time valid, time(NULL) ready");
+}
+
+// ============================================================
+// JSON builder — cJSON_PrintPreallocated: không alloc heap động
+// ============================================================
+size_t NetworkManager::buildJson(const AirData &data, char *out, size_t out_sz,
+                                 const char *alert_reason) {
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return 0;  // heap cạn kiệt — caller log và xử lý
+
+    // --- Metadata ---
+    cJSON_AddNumberToObject(root, "ts",      (double)data.timestamp);
+    cJSON_AddBoolToObject  (root, "valid",   data.data_valid);
+
+    // --- BME680 ---
+    cJSON_AddNumberToObject(root, "temp",    data.temperature);
+    cJSON_AddNumberToObject(root, "humi",    data.humidity);
+    cJSON_AddNumberToObject(root, "pres",    data.pressure);
+    cJSON_AddNumberToObject(root, "gas",     data.gas_resistance);
+
+    // --- PMS5003 ---
+    cJSON_AddNumberToObject(root, "pm1",     data.pm1_0);
+    cJSON_AddNumberToObject(root, "pm25",    data.pm2_5);
+    cJSON_AddNumberToObject(root, "pm10",    data.pm10);
+
+    // --- MQ-135 ---
+    cJSON_AddNumberToObject(root, "co2",     data.co2_ppm);
+    cJSON_AddNumberToObject(root, "tvoc",    data.tvoc_ppm);
+
+    // --- Chỉ số tính toán (DataFusion) ---
+    cJSON_AddNumberToObject(root, "aqi",     data.aqi);
+    cJSON_AddNumberToObject(root, "aqi_cat", data.aqi_category);
+    cJSON_AddNumberToObject(root, "comfort", data.comfort_index);
+
+    // --- Hiệu chuẩn (Drift Self-Check) ---
+    cJSON_AddBoolToObject  (root, "calib_alert", data.calib_needed);
+    cJSON_AddNumberToObject(root, "calib_ts",    (double)data.last_calib_timestamp);
+
+    // Chỉ thêm "reason" trong payload alert — giúp cloud phân biệt nguyên nhân
+    if (alert_reason) {
+        cJSON_AddStringToObject(root, "reason", alert_reason);
+    }
+
+    // fmt=0: compact JSON (không khoảng trắng) — tiết kiệm buffer và băng thông
+    size_t n = 0;
+    if (cJSON_PrintPreallocated(root, out, static_cast<int>(out_sz), 0)) {
+        n = std::strlen(out);
+    }
+    cJSON_Delete(root);
+    return n;
+}

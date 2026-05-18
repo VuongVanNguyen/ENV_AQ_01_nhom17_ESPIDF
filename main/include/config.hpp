@@ -32,7 +32,7 @@ inline constexpr uint8_t  PCF8574_I2C_ADDR  = 0x20;      // A0/A1/A2 = GND
 // 2. PMS5003 — UART
 // ============================================================
 
-inline constexpr int      PMS_UART_PORT     = 1;          // UART_NUM_1
+inline constexpr int      PMS_UART_PORT     = 2;          // UART_NUM_2 — GPIO16/17 là default pins của UART2, không remap
 inline constexpr int      PMS_UART_RX_PIN   = 16;
 inline constexpr int      PMS_UART_TX_PIN   = 17;
 inline constexpr int      PMS_SET_PIN       = 4;          // LOW = sleep, HIGH = active
@@ -105,9 +105,9 @@ inline constexpr uint32_t LCD_MAX_INTERVAL_MS        = 5'000;  // Giới hạn t
 // Tính từ thời điểm SensorManager::init() trả ESP_OK. Trước khi hết
 // warmup, các giá trị tương ứng vẫn được đọc nhưng cờ *_ready=false
 // để module hạ nguồn coi là RÁC, không feed vào AQI / cảnh báo / log.
-inline constexpr uint32_t BME680_WARMUP_MS           = 30'000;   // Heater + IIR filter ổn định
+inline constexpr uint32_t BME680_WARMUP_MS           = 300'000;  // MOx đạt cân bằng hóa học (~5 phút)
 inline constexpr uint32_t PMS5003_WARMUP_MS          = 30'000;   // Fan đạt tốc quay danh định
-inline constexpr uint32_t MQ135_WARMUP_MS            = 180'000;  // MOX preheat tối thiểu (3 phút)
+inline constexpr uint32_t MQ135_WARMUP_MS            = 1'200'000; // MOX preheat theo datasheet (20 phút)
 
 // ============================================================
 // 7. AQI — NGƯỠNG PHÂN LOẠI (PM2.5, µg/m³, tiêu chuẩn VN)

@@ -20,7 +20,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#include "i2cdev.h"           // i2cdev_init() — bus mgmt cho bme680 lib
+#include "i2cdev.h"           
 
 #include <cstring>
 #include <cmath>
@@ -66,37 +66,37 @@ SensorManager::~SensorManager() {
 //   DisplayManager mà không lỗi.
 // ============================================================
 esp_err_t SensorManager::init() {
-    ESP_LOGI(TAG, "Initializing 3 sensors (BME680 / PMS5003 / MQ-135)...");
+    ESP_LOGI(TAG, "Khởi tạo 3 cảm biến (BME680 / PMS5003 / MQ-135)...");
 
     // Khởi tạo subsystem i2cdev — bắt buộc trước mọi i2c_dev_t.
     // Hàm này có cờ static guard nên gọi nhiều lần không leak.
     esp_err_t err = i2cdev_init();
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "i2cdev_init failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "Khởi tạo I2C thất bại: %s", esp_err_to_name(err));
         return err;
     }
 
     err = bme680Setup();
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "BME680 init failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "BME680 khởi tạo thất bại: %s", esp_err_to_name(err));
         return err;
     }
 
     err = pmsInit();
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "PMS5003 init failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "PMS5003 khởi tạo thất bại: %s", esp_err_to_name(err));
         return err;
     }
 
     err = mq135Init();
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "MQ-135 init failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "MQ-135 khởi tạo thất bại: %s", esp_err_to_name(err));
         return err;
     }
 
     // Mốc thời gian dùng để tính warmup cho cả 3 cảm biến.
     boot_time_us_ = esp_timer_get_time();
-    ESP_LOGI(TAG, "SensorManager ready — warmup: BME680=%lums PMS=%lums MQ135=%lums",
+    ESP_LOGI(TAG, "Cảm biến sẵn sàng - chờ ổn định: BME680=%lums PMS=%lums MQ135=%lums",
              (unsigned long)Cfg::BME680_WARMUP_MS,
              (unsigned long)Cfg::PMS5003_WARMUP_MS,
              (unsigned long)Cfg::MQ135_WARMUP_MS);
@@ -116,7 +116,7 @@ esp_err_t SensorManager::readAll(AirData &out) {
     bool  heater_ok = false;
     esp_err_t err = bme680ReadOnce(t, rh, p, gas, heater_ok);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "BME680 read failed: %s", esp_err_to_name(err));
+        ESP_LOGW(TAG, "Đọc BME680 thất bại: %s", esp_err_to_name(err));
         return err;                               // lỗi cứng → bỏ chu kỳ
     }
     out.temperature    = t;
@@ -141,7 +141,7 @@ esp_err_t SensorManager::readAll(AirData &out) {
         // reset khi PM=0 — trong môi trường thực sự sạch, PM có thể =0 hợp lệ.
         if (pms_valid_streak_ < Cfg::PMS_VALID_STREAK_OK) ++pms_valid_streak_;
     } else {
-        ESP_LOGW(TAG, "PMS5003 frame fail (%s) — giữ giá trị 0",
+        ESP_LOGW(TAG, "PMS5003 đọc frame thất bại (%s) — giữ giá trị 0",
                  esp_err_to_name(err));
         pms_valid_streak_ = 0;                    // chỉ reset khi đọc frame thất bại
     }
@@ -223,7 +223,7 @@ esp_err_t SensorManager::bme680Setup() {
     err = bme680_set_ambient_temperature(&bme680_dev_, Cfg::BME680_AMBIENT_TEMP_C);
     if (err != ESP_OK) return err;
 
-    ESP_LOGI(TAG, "BME680 ready (addr 0x%02X, heater %u°C/%ums)",
+    ESP_LOGI(TAG, "BME680 sẵn sàng (addr 0x%02X, heater %u°C/%ums)",
              Cfg::BME680_I2C_ADDR,
              (unsigned)Cfg::BME680_HEATER_TEMP_C,
              (unsigned)Cfg::BME680_HEATER_DUR_MS);
@@ -301,7 +301,7 @@ esp_err_t SensorManager::pmsInit() {
     if (err != ESP_OK) { uart_driver_delete(port); return err; }
 
     uart_installed_ = true;
-    ESP_LOGI(TAG, "PMS5003 UART%d ready (RX=%d TX=%d SET=%d)",
+    ESP_LOGI(TAG, "PMS5003 UART%d sẵn sàng (RX=%d TX=%d SET=%d)",
              Cfg::PMS_UART_PORT, Cfg::PMS_UART_RX_PIN,
              Cfg::PMS_UART_TX_PIN, Cfg::PMS_SET_PIN);
     return ESP_OK;
@@ -387,8 +387,8 @@ esp_err_t SensorManager::mq135Init() {
     }
 #endif
 
-    ESP_LOGI(TAG, "MQ-135 ADC1 ch%d ready (calib=%s)",
-             Cfg::MQ135_ADC_CHANNEL, adc_cali_enabled_ ? "yes" : "no");
+    ESP_LOGI(TAG, "MQ-135 ADC1 kênh %d sẵn sàng (hiệu chuẩn=%s)",
+             Cfg::MQ135_ADC_CHANNEL, adc_cali_enabled_ ? "có" : "không");
     return ESP_OK;
 }
 

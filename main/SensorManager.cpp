@@ -12,6 +12,8 @@
 
 #include "SensorManager.hpp"
 
+#include <algorithm>
+
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "driver/uart.h"
@@ -291,8 +293,8 @@ esp_err_t SensorManager::pmsInit() {
     };
     const uart_port_t port = static_cast<uart_port_t>(Cfg::PMS_UART_PORT);
 
-    // RX buffer đủ chứa ~2 frame để chống miss khi task bận
-    err = uart_driver_install(port, Cfg::PMS_RX_BUF_SIZE * 2, 0, 0, nullptr, 0);
+    // RX buffer chứa 8 frame (> ESP32 FIFO 128 bytes), đủ dự phòng khi task bị preempt
+    err = uart_driver_install(port, Cfg::PMS_FRAME_LEN * 8, 0, 0, nullptr, 0);
     if (err != ESP_OK) return err;
     err = uart_param_config(port, &cfg);
     if (err != ESP_OK) { uart_driver_delete(port); return err; }
@@ -307,34 +309,64 @@ esp_err_t SensorManager::pmsInit() {
     return ESP_OK;
 }
 
-esp_err_t SensorManager::pmsReadFrame(uint16_t &pm1, uint16_t &pm25, uint16_t &pm10) {
-    const uart_port_t port = static_cast<uart_port_t>(Cfg::PMS_UART_PORT);
-    uint8_t buf[Cfg::PMS_FRAME_LEN];
-
-    // Quét tìm magic 0x42 0x4D — tối đa 64 byte để giới hạn thời gian
+// Quét tìm 0x42 0x4D, đọc đủ PMS_FRAME_LEN byte vào buf, xác minh checksum.
+// scan_ticks: timeout mỗi byte khi tìm start byte — dùng 150ms lần đầu (chờ frame
+// chưa có), dùng 2ms khi drain (dữ liệu đã có sẵn trong ring buffer).
+esp_err_t SensorManager::pmsReadOneFrame(uart_port_t port, uint8_t *buf, TickType_t scan_ticks) {
     uint8_t b = 0;
     int scanned = 0;
-    while (scanned < 64) {
-        int n = uart_read_bytes(port, &b, 1, pdMS_TO_TICKS(150));
-        if (n != 1) return ESP_ERR_TIMEOUT;
+    bool got_start = false;
+    bool found = false;
+    while (scanned < Cfg::PMS_FRAME_LEN * 2) {
+        TickType_t ticks = got_start ? std::min(scan_ticks, pdMS_TO_TICKS(20)) : scan_ticks;
+        if (uart_read_bytes(port, &b, 1, ticks) != 1) {
+            if (got_start) { got_start = false; continue; }
+            return ESP_ERR_TIMEOUT;
+        }
         scanned++;
-        if (b == 0x42) {
-            n = uart_read_bytes(port, &b, 1, pdMS_TO_TICKS(20));
-            if (n == 1 && b == 0x4D) break;
+        if (got_start) {
+            if (b == 0x4D) { buf[1] = b; found = true; break; }
+            got_start = (b == 0x42);
+            if (got_start) buf[0] = b;
+        } else if (b == 0x42) {
+            buf[0] = b;
+            got_start = true;
         }
     }
-    if (scanned >= 64) return ESP_ERR_NOT_FOUND;
-
-    buf[0] = 0x42; buf[1] = 0x4D;
-    int n = uart_read_bytes(port, buf + 2, Cfg::PMS_FRAME_LEN - 2, pdMS_TO_TICKS(100));
-    if (n != Cfg::PMS_FRAME_LEN - 2) return ESP_ERR_TIMEOUT;
-
-    // Verify checksum: tổng 30 byte đầu == 2 byte cuối (big-endian)
+    if (!found) return ESP_ERR_NOT_FOUND;
+    if (uart_read_bytes(port, buf + 2, Cfg::PMS_FRAME_LEN - 2, pdMS_TO_TICKS(100)) != Cfg::PMS_FRAME_LEN - 2)
+        return ESP_ERR_TIMEOUT;
     uint16_t sum = 0;
     for (int i = 0; i < Cfg::PMS_FRAME_LEN - 2; ++i) sum += buf[i];
     uint16_t expect = (static_cast<uint16_t>(buf[Cfg::PMS_FRAME_LEN - 2]) << 8)
                     | buf[Cfg::PMS_FRAME_LEN - 1];
-    if (sum != expect) return ESP_ERR_INVALID_CRC;
+    return (sum == expect) ? ESP_OK : ESP_ERR_INVALID_CRC;
+}
+
+esp_err_t SensorManager::pmsReadFrame(uint16_t &pm1, uint16_t &pm25, uint16_t &pm10) {
+    const uart_port_t port = static_cast<uart_port_t>(Cfg::PMS_UART_PORT);
+    uint8_t buf[Cfg::PMS_FRAME_LEN];
+
+    // Chờ frame đầu tiên — scan_ticks 150ms để bắt frame kể cả khi buffer trống
+    esp_err_t err = pmsReadOneFrame(port, buf, pdMS_TO_TICKS(150));
+    if (err != ESP_OK) return err;
+
+    // Drain các frame tích đống: đọc tiếp khi còn đủ 1 frame trong ring buffer.
+    // uart_read_bytes trả về ngay (dữ liệu đã trong RAM) → không tốn thời gian chờ.
+    // Giữ frame cuối cùng hợp lệ để luôn trả về dữ liệu mới nhất.
+    // Guard: nếu avail không giảm sau 1 iteration (pmsReadOneFrame tiêu thụ 0 byte
+    // do corrupt/partial data) → break tránh vòng lặp vô hạn.
+    size_t avail = 0;
+    uart_get_buffered_data_len(port, &avail);
+    while (avail >= static_cast<size_t>(Cfg::PMS_FRAME_LEN)) {
+        uint8_t tmp[Cfg::PMS_FRAME_LEN];
+        if (pmsReadOneFrame(port, tmp, pdMS_TO_TICKS(2)) == ESP_OK)
+            memcpy(buf, tmp, Cfg::PMS_FRAME_LEN);
+        size_t tmp_avail = 0;
+        uart_get_buffered_data_len(port, &tmp_avail);
+        if (tmp_avail >= avail) break;
+        avail = tmp_avail;
+    }
 
     // Dùng giá trị "atmospheric" (offset 10/12/14) — phù hợp môi trường thực
     pm1  = (static_cast<uint16_t>(buf[10]) << 8) | buf[11];

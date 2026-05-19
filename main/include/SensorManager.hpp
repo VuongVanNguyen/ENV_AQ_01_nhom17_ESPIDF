@@ -31,6 +31,8 @@
 #include "esp_err.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_adc/adc_cali.h"
+#include "driver/uart.h"
+#include "freertos/FreeRTOS.h"
 
 #include "bme680.h"   // esp-idf-lib — đã có guard extern "C" sẵn
 
@@ -84,6 +86,7 @@ private:
     // ---- PMS5003 helpers ----
     esp_err_t pmsInit();
     esp_err_t pmsReadFrame(uint16_t &pm1, uint16_t &pm25, uint16_t &pm10);
+    static esp_err_t pmsReadOneFrame(uart_port_t port, uint8_t *buf, TickType_t scan_ticks);
 
     // ---- MQ-135 helpers ----
     esp_err_t mq135Init();

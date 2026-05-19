@@ -25,6 +25,7 @@ project_root/
 │   ├── CMakeLists.txt          # Khai báo SRCS và INCLUDE_DIRS — xem nội dung bên dưới
 │   ├── include/                # Toàn bộ file header (.hpp) đặt tại đây
 │   │   ├── DataStructures.hpp  # Định nghĩa struct AirData dùng chung toàn project
+│   │   ├── config.hpp          # Các hằng số của namespace Cfg được đặt ở đây 
 │   │   ├── SensorManager.hpp
 │   │   ├── Filters.hpp
 │   │   ├── DataFusion.hpp

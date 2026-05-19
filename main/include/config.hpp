@@ -37,7 +37,6 @@ inline constexpr int      PMS_UART_RX_PIN   = 16;
 inline constexpr int      PMS_UART_TX_PIN   = 17;
 inline constexpr int      PMS_SET_PIN       = 4;          // LOW = sleep, HIGH = active
 inline constexpr int      PMS_UART_BAUD     = 9600;
-inline constexpr int      PMS_RX_BUF_SIZE   = 256;
 inline constexpr int      PMS_FRAME_LEN     = 32;         // Độ dài frame chuẩn PMS5003
 inline constexpr int      PMS_VALID_STREAK_OK = 3;        // Số frame OK liên tiếp cần có trước khi cờ ready=true
 

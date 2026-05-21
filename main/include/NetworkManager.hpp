@@ -81,11 +81,11 @@ private:
     std::atomic<bool> wifi_connected_;
     std::atomic<bool> mqtt_connected_;
 
-    CommandCallback cmd_callback_;
-
     // Client ID = "aq01_<MAC WiFi STA>" — duy nhất mỗi thiết bị,
     // tránh xung đột broker khi nhiều trạm AQ01 kết nối cùng lúc.
     char mqtt_client_id_[24];
+
+    CommandCallback cmd_callback_;
 
     esp_err_t initWifi();
     esp_err_t initMqtt();

@@ -405,9 +405,10 @@ esp_err_t SensorManager::mq135Init() {
     adc_cali_enabled_ = false;
 #if ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
     adc_cali_line_fitting_config_t cali_cfg = {
-        .unit_id  = static_cast<adc_unit_t>(Cfg::MQ135_ADC_UNIT),
-        .atten    = static_cast<adc_atten_t>(Cfg::MQ135_ADC_ATTEN),
-        .bitwidth = static_cast<adc_bitwidth_t>(Cfg::MQ135_ADC_BITWIDTH),
+        .unit_id      = static_cast<adc_unit_t>(Cfg::MQ135_ADC_UNIT),
+        .atten        = static_cast<adc_atten_t>(Cfg::MQ135_ADC_ATTEN),
+        .bitwidth     = static_cast<adc_bitwidth_t>(Cfg::MQ135_ADC_BITWIDTH),
+        .default_vref = Cfg::MQ135_ADC_DEFAULT_VREF_MV,
     };
     if (adc_cali_create_scheme_line_fitting(&cali_cfg, &adc_cali_) == ESP_OK) {
         adc_cali_enabled_ = true;

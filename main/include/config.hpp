@@ -58,6 +58,7 @@ inline constexpr int      MQ135_ADC_UNIT    = 0;          // ADC_UNIT_1
 inline constexpr int      MQ135_ADC_CHANNEL = 6;          // ADC1_CHANNEL_6 → GPIO34
 inline constexpr int      MQ135_ADC_ATTEN   = 3;          // ADC_ATTEN_DB_12 (0–3.3V)
 inline constexpr int      MQ135_ADC_BITWIDTH = 12;        // ADC_BITWIDTH_12
+inline constexpr uint32_t MQ135_ADC_DEFAULT_VREF_MV = 1100; // mV — điện áp tham chiếu nội ESP32, dùng khi eFuse chưa burn
 
 // Hệ số chuyển đổi điện áp → nồng độ (cần hiệu chuẩn thực tế)
 inline constexpr float    MQ135_VREF        = 3.3f;       // V

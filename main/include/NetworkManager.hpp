@@ -23,7 +23,7 @@
 #include "esp_err.h"
 #include "esp_event.h"
 #include "esp_netif.h"
-#include "esp_netif_sntp.h"  // esp_netif_sntp_init/deinit (ESP-IDF v5.1+)
+#include "esp_netif_sntp.h"
 #include "esp_wifi.h"
 #include "mqtt_client.h"
 
@@ -31,6 +31,12 @@
 #include "freertos/event_groups.h"
 
 #include <atomic>
+#include <functional>
+
+// Callback được gọi khi broker gửi lệnh xuống qua MQTT_TOPIC_CMD.
+// `cmd`: chuỗi từ field "cmd" trong JSON payload (ví dụ: "confirm_calib").
+// Được đăng ký bởi DataFusion/main — không gọi trực tiếp từ NetworkManager.
+using CommandCallback = std::function<void(const char *cmd)>;
 
 class NetworkManager {
 public:
@@ -54,6 +60,11 @@ public:
     // `reason`: chuỗi mô tả lý do cảnh báo (ví dụ "CALIB_DRIFT_TEMP").
     esp_err_t publishAlert(const AirData &data, const char *reason);
 
+    // Đăng ký callback nhận lệnh từ broker (topic MQTT_TOPIC_CMD).
+    // Gọi trước init(). Callback chạy trong context của MQTT event task —
+    // nếu cần ghi NVS hay thay đổi shared state, dùng mutex hoặc queue.
+    void setCommandCallback(CommandCallback cb);
+
     // True ⇔ cả Wi-Fi (đã có IP) lẫn MQTT đều đang connected.
     bool isConnected() const;
 
@@ -70,6 +81,8 @@ private:
     std::atomic<bool> wifi_connected_;
     std::atomic<bool> mqtt_connected_;
 
+    CommandCallback cmd_callback_;
+
     // Client ID = "aq01_<MAC WiFi STA>" — duy nhất mỗi thiết bị,
     // tránh xung đột broker khi nhiều trạm AQ01 kết nối cùng lúc.
     char mqtt_client_id_[24];
@@ -77,6 +90,10 @@ private:
     esp_err_t initWifi();
     esp_err_t initMqtt();
     esp_err_t initSntp();  // khởi tạo SNTP sau khi netif + event loop sẵn sàng
+
+    // Xử lý lệnh nhận từ broker: built-in commands (reboot...) trước,
+    // sau đó delegate sang cmd_callback_ cho các lệnh nghiệp vụ (confirm_calib...).
+    void dispatchCommand(const char *cmd);
 
     // Static handlers: esp_event yêu cầu free function signature;
     // `arg` = `this` để truy cập state instance.

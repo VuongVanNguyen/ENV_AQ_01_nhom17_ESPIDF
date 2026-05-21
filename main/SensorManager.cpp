@@ -26,6 +26,7 @@
 
 #include <cstring>
 #include <cmath>
+#include <ctime>
 
 static const char *TAG = "SensorManager";
 
@@ -163,9 +164,13 @@ esp_err_t SensorManager::readAll(AirData &out) {
     // ---------- Tổng hợp ----------
     out.sensors_ready = out.bme680_ready && out.pms5003_ready && out.mq135_ready;
 
-    // Timestamp tương đối (giây) — NetworkManager/DataFusion có thể ghi đè
-    // bằng Unix-time chính xác sau khi SNTP đồng bộ.
-    out.timestamp  = esp_timer_get_time() / 1000000LL;
+    // Dùng Unix time nếu SNTP đã sync (heuristic: time(NULL) > 1577836800 = 1/1/2020).
+    // Trước khi SNTP sẵn sàng, fallback về seconds-from-boot — monotonic nhưng không lịch,
+    // reset về 0 sau reboot. NetworkManager::isTimeSynced() là nguồn chính xác hơn nhưng
+    // tránh coupling SensorManager → NetworkManager.
+    time_t now = time(NULL);
+    out.timestamp = (now > 1577836800LL) ? static_cast<int64_t>(now)
+                                         : (esp_timer_get_time() / 1000000LL);
     out.data_valid = true;
     return ESP_OK;
 }

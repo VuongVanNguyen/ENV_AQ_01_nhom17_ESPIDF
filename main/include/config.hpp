@@ -136,6 +136,7 @@ inline constexpr const char *WIFI_PASSWORD     = CONFIG_WIFI_PASSWORD;
 inline constexpr const char *MQTT_BROKER_URL   = CONFIG_MQTT_BROKER_URL;
 inline constexpr const char *MQTT_TOPIC_DATA   = CONFIG_MQTT_TOPIC;
 inline constexpr const char *MQTT_TOPIC_ALERT  = CONFIG_MQTT_TOPIC_ALERT;
+inline constexpr const char *MQTT_TOPIC_CMD    = CONFIG_MQTT_TOPIC_CMD;  // subscribe — nhận lệnh từ broker
 inline constexpr const char *NTP_SERVER_URL    = CONFIG_NTP_SERVER_URL;  // SNTP server
 inline constexpr int         MQTT_JSON_BUF_LEN = 512;   // Byte — đủ cho toàn bộ AirData
 

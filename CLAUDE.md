@@ -69,6 +69,8 @@ idf_component_register(
 | `main/StorageHelper.cpp` | Ghi log dữ liệu vào thẻ SD (định dạng .csv). | `esp_vfs_fat_sdmmc_mount`, `sdmmc_*` |
 | `main/main.cpp` | Khởi tạo hệ thống (`extern "C" void app_main()`), tạo và điều phối bằng FreeRTOS tasks — không dùng `vTaskDelay()` làm logic chính. | `xTaskCreate`, `esp_event_loop_*` |
 
+> **Lưu ý:** `NetworkManager::setCommandCallback()` phải được gọi trong `main.cpp` — không phải `DataFusion`.
+
 ## 3. Ràng buộc kỹ thuật (Constraints & NFR)
 - **Năng lượng:** Công suất trung bình <= 2.0W. Sử dụng Modem-sleep (`esp_wifi_set_ps(WIFI_PS_MODEM)`) khi nhàn rỗi.
 - **Thời gian thực:** Tổng chu kỳ đọc + xử lý dữ liệu phải hoàn tất trong <= 300ms.

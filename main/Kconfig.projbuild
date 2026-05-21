@@ -32,6 +32,13 @@ menu "ENV-AQ-01 Project Configuration"
             default "env/aq01/alert"
             help
                 Topic để publish cảnh báo (calib_alert, threshold breach).
+
+        config MQTT_TOPIC_CMD
+            string "MQTT Command Topic (subscribe)"
+            default "env/aq01/cmd"
+            help
+                Topic broker gửi lệnh xuống thiết bị.
+                Payload JSON hỗ trợ: {"cmd":"confirm_calib"}, {"cmd":"reboot"}.
     endmenu
 
     menu "AQI Thresholds (µg/m³ PM2.5)"

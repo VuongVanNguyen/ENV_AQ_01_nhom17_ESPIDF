@@ -11,6 +11,7 @@
 #include "NetworkManager.hpp"
 
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
 #include "esp_netif_sntp.h"  // esp_netif_sntp_init/deinit, esp_sntp_config_t
@@ -18,6 +19,7 @@
 #include "mqtt_client.h"
 #include "cJSON.h"
 
+#include <algorithm>
 #include <cstring>
 #include <cstdio>
 
@@ -40,7 +42,8 @@ NetworkManager::NetworkManager()
       evt_group_(nullptr),
       wifi_connected_(false),
       mqtt_connected_(false),
-      mqtt_client_id_{} {}  // zero-init toàn bộ client ID buffer
+      mqtt_client_id_{},
+      cmd_callback_(nullptr) {}
 
 NetworkManager::~NetworkManager() {
     if (mqtt_) {
@@ -72,23 +75,23 @@ esp_err_t NetworkManager::init() {
 
     err = initWifi();
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Wi-Fi init failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "Wi-Fi khởi tạo thất bại: %s", esp_err_to_name(err));
         return err;
     }
 
     err = initMqtt();
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "MQTT init failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "MQTT khởi tạo thất bại: %s", esp_err_to_name(err));
         return err;
     }
 
     err = initSntp();
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "SNTP init failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "SNTP khởi tạo thất bại: %s", esp_err_to_name(err));
         return err;
     }
 
-    ESP_LOGI(TAG, "NetworkManager ready — SSID='%s' broker='%s' ntp='%s'",
+    ESP_LOGI(TAG, "NetworkManager sẵn sàng — SSID='%s' broker='%s' ntp='%s'",
              Cfg::WIFI_SSID, Cfg::MQTT_BROKER_URL, Cfg::NTP_SERVER_URL);
     return ESP_OK;
 }
@@ -183,12 +186,12 @@ esp_err_t NetworkManager::initSntp() {
     esp_err_t err = esp_netif_sntp_init(&cfg);
     if (err == ESP_ERR_INVALID_STATE) {
         // SNTP đã được init trước đó (singleton) — không phải lỗi
-        ESP_LOGW(TAG, "SNTP already initialized");
+        ESP_LOGW(TAG, "SNTP đã được khởi tạo trước đó — bỏ qua");
         return ESP_OK;
     }
     if (err != ESP_OK) return err;
 
-    ESP_LOGI(TAG, "SNTP init OK — server='%s'", Cfg::NTP_SERVER_URL);
+    ESP_LOGI(TAG, "SNTP khởi tạo thành công — server='%s'", Cfg::NTP_SERVER_URL);
     return ESP_OK;
 }
 
@@ -202,7 +205,8 @@ esp_err_t NetworkManager::publishData(const AirData &data) {
     size_t n = buildJson(data, json, sizeof(json));
     if (n == 0) return ESP_FAIL;
 
-    // QoS 1: broker xác nhận ít nhất 1 lần nhận — phù hợp dữ liệu môi trường
+    // QoS 1: đảm bảo broker nhận ít nhất 1 lần — nếu PUBACK mất, client retransmit
+    // và subscriber có thể nhận duplicate. Dedup phía subscriber bằng (ts, client_id).
     int msg_id = esp_mqtt_client_publish(mqtt_, Cfg::MQTT_TOPIC_DATA,
                                          json, static_cast<int>(n), 1, 0);
     return (msg_id >= 0) ? ESP_OK : ESP_FAIL;
@@ -228,6 +232,12 @@ bool NetworkManager::isTimeSynced() const {
     return s_sntp_synced.load();  // true sau khi sntpSyncCb() được gọi lần đầu
 }
 
+// Hàm này nhận các tham số là một đối tượng có thể gọi được (callable) như hàm, lambda, hoặc std::function.
+// Nó cho phép người dùng đăng ký một callback để xử lý các lệnh nhận được từ broker qua MQTT_TOPIC_CMD.
+void NetworkManager::setCommandCallback(CommandCallback cb) {   
+    cmd_callback_ = std::move(cb);
+}
+
 // ============================================================
 // Event handlers
 // ============================================================
@@ -236,16 +246,23 @@ void NetworkManager::wifiEventHandler(void *arg, esp_event_base_t,
     auto *self = static_cast<NetworkManager *>(arg);
     switch (id) {
         case WIFI_EVENT_STA_START:
-            ESP_LOGI(TAG, "Wi-Fi start — connecting to '%s'...", Cfg::WIFI_SSID);
+            ESP_LOGI(TAG, "Wi-Fi khởi động — kết nối tới '%s'...", Cfg::WIFI_SSID);
             esp_wifi_connect();
             break;
+
+        case WIFI_EVENT_STA_CONNECTED: {
+            auto *evt = static_cast<wifi_event_sta_connected_t *>(event_data);
+            ESP_LOGI(TAG, "Wi-Fi kết nối thành công (SSID='%s', kênh=%d) — chờ IP...",
+                     (char *)evt->ssid, evt->channel);
+            break;
+        }
 
         case WIFI_EVENT_STA_DISCONNECTED: {
             // Log reason giúp phân biệt: AUTH_FAIL (sai pass) vs AP_NOT_FOUND vs timeout
             auto *evt = static_cast<wifi_event_sta_disconnected_t *>(event_data);
             self->wifi_connected_.store(false);
             xEventGroupClearBits(self->evt_group_, BIT_WIFI_OK);
-            ESP_LOGW(TAG, "Wi-Fi disconnected (reason=%d) — retry", (int)evt->reason);
+            ESP_LOGW(TAG, "Wi-Fi mất kết nối (lí do=%d) — chờ kết nối lại", (int)evt->reason);
             esp_wifi_connect();  // reconnect không block; driver tự retry
             break;
         }
@@ -259,7 +276,7 @@ void NetworkManager::ipEventHandler(void *arg, esp_event_base_t,
     auto *self = static_cast<NetworkManager *>(arg);
     if (id == IP_EVENT_STA_GOT_IP) {
         auto *evt = static_cast<ip_event_got_ip_t *>(event_data);
-        ESP_LOGI(TAG, "Got IP " IPSTR, IP2STR(&evt->ip_info.ip));
+        ESP_LOGI(TAG, "Có IP " IPSTR, IP2STR(&evt->ip_info.ip));
         self->wifi_connected_.store(true);
         xEventGroupSetBits(self->evt_group_, BIT_WIFI_OK);
         // SNTP tự bắt đầu sync khi mạng available — esp_netif_sntp xử lý nội bộ
@@ -274,20 +291,53 @@ void NetworkManager::mqttEventHandler(void *arg, esp_event_base_t,
         case MQTT_EVENT_CONNECTED:
             self->mqtt_connected_.store(true);
             xEventGroupSetBits(self->evt_group_, BIT_MQTT_OK);
-            // Log client ID để xác nhận đúng thiết bị kết nối trên broker
-            ESP_LOGI(TAG, "MQTT connected (client_id='%s')", self->mqtt_client_id_);
+            ESP_LOGI(TAG, "MQTT kết nối thành công (client_id='%s')", self->mqtt_client_id_);
+            // Subscribe topic lệnh mỗi lần reconnect — broker không giữ subscription sau disconnect
+            esp_mqtt_client_subscribe(self->mqtt_, Cfg::MQTT_TOPIC_CMD, 1);
+            ESP_LOGI(TAG, "Đã subscribe topic lệnh '%s'", Cfg::MQTT_TOPIC_CMD);
             break;
 
         case MQTT_EVENT_DISCONNECTED:
             self->mqtt_connected_.store(false);
             xEventGroupClearBits(self->evt_group_, BIT_MQTT_OK);
-            ESP_LOGW(TAG, "MQTT disconnected — client tự reconnect");
+            ESP_LOGW(TAG, "MQTT mất kết nối — client tự động kết nối lại nếu Wi-Fi sẵn sàng");
             break;
+
+        case MQTT_EVENT_DATA: {
+            if (!evt || !evt->topic || !evt->data) break;
+
+            // So sánh topic (không null-terminated — phải dùng topic_len)
+            size_t cmd_topic_len = std::strlen(Cfg::MQTT_TOPIC_CMD);
+            if (static_cast<size_t>(evt->topic_len) != cmd_topic_len ||
+                std::strncmp(evt->topic, Cfg::MQTT_TOPIC_CMD, cmd_topic_len) != 0) {
+                break;
+            }
+
+            // Copy payload vào buffer cục bộ để null-terminate
+            char payload[64];
+            size_t copy_len = std::min(static_cast<size_t>(evt->data_len), sizeof(payload) - 1);
+            std::memcpy(payload, evt->data, copy_len);
+            payload[copy_len] = '\0';
+
+            cJSON *root = cJSON_Parse(payload);
+            if (!root) {
+                ESP_LOGW(TAG, "Lệnh nhận được không phải JSON hợp lệ: %s", payload);
+                break;
+            }
+
+            cJSON *cmd_item = cJSON_GetObjectItem(root, "cmd");
+            if (cJSON_IsString(cmd_item)) {
+                ESP_LOGI(TAG, "Nhận lệnh từ broker: '%s'", cmd_item->valuestring);
+                self->dispatchCommand(cmd_item->valuestring);
+            }
+            cJSON_Delete(root);
+            break;
+        }
 
         case MQTT_EVENT_ERROR:
             if (evt && evt->error_handle) {
                 // error_type: 0=TCP transport, 1=PAHO, 2=TLS, 3=DNS
-                ESP_LOGE(TAG, "MQTT error type=%d", (int)evt->error_handle->error_type);
+                ESP_LOGE(TAG, "MQTT loại lỗi=%d", (int)evt->error_handle->error_type);
             }
             break;
 
@@ -302,7 +352,23 @@ void NetworkManager::sntpSyncCb(struct timeval *) {
     // Được lwip gọi một lần khi sync xong — set flag vĩnh viễn.
     // time(NULL) từ đây trở đi trả Unix timestamp UTC hợp lệ.
     s_sntp_synced.store(true);
-    ESP_LOGI(TAG, "SNTP synced — Unix time valid, time(NULL) ready");
+    ESP_LOGI(TAG, "SNTP đã đồng bộ — Unix time hợp lệ, time(NULL) sẵn sàng");
+}
+
+// ============================================================
+// Command dispatch
+// ============================================================
+void NetworkManager::dispatchCommand(const char *cmd) {
+    // Built-in: lệnh hệ thống xử lý trực tiếp tại đây.
+    // Nghiệp vụ (confirm_calib, set_interval...): delegate sang cmd_callback_.
+    if (std::strcmp(cmd, "reboot") == 0) {
+        ESP_LOGW(TAG, "Thực thi lệnh reboot...");
+        esp_restart();  // không trở về
+    } else if (cmd_callback_) {
+        cmd_callback_(cmd);
+    } else {
+        ESP_LOGW(TAG, "Lệnh '%s' không có handler — đăng ký setCommandCallback()", cmd);
+    }
 }
 
 // ============================================================
@@ -336,6 +402,12 @@ size_t NetworkManager::buildJson(const AirData &data, char *out, size_t out_sz,
     cJSON_AddNumberToObject(root, "aqi",     data.aqi);
     cJSON_AddNumberToObject(root, "aqi_cat", data.aqi_category);
     cJSON_AddNumberToObject(root, "comfort", data.comfort_index);
+
+    // --- Trạng thái sẵn sàng cảm biến ---
+    cJSON_AddBoolToObject(root, "bme680_ok",  data.bme680_ready);
+    cJSON_AddBoolToObject(root, "pms_ok",     data.pms5003_ready);
+    cJSON_AddBoolToObject(root, "mq135_ok",   data.mq135_ready);
+    cJSON_AddBoolToObject(root, "sensors_ok", data.sensors_ready);
 
     // --- Hiệu chuẩn (Drift Self-Check) ---
     cJSON_AddBoolToObject  (root, "calib_alert", data.calib_needed);

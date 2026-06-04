@@ -90,7 +90,10 @@ private:
 
     // ---- MQ-135 helpers ----
     esp_err_t mq135Init();
-    esp_err_t mq135ReadPpm(float &co2_ppm);
+    // t_c và rh_pct từ BME680 — dùng để chuẩn hóa Rs về điều kiện tham chiếu trước khi áp power-law.
+    esp_err_t mq135ReadPpm(float &co2_ppm, float t_c, float rh_pct);
+    // Hệ số bù nhiệt/ẩm GeorgK 2015 — hằng số từ Cfg::MQ135_COR*.
+    static float mq135CorrectionFactor(float t_c, float rh_pct);
 
     // ---- Utility ----
     uint32_t  elapsedMs() const;  // ms trôi qua từ boot_time_us_

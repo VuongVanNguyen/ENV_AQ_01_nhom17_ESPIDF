@@ -105,4 +105,24 @@ menu "ENV-AQ-01 Project Configuration"
             range 1000 10000
     endmenu
 
+    choice TEST_MODE
+        prompt "Sensor Test Mode"
+        default TEST_MODE_NONE
+        help
+            Chọn chế độ test khi đang debug phần cứng từng cảm biến.
+            Khi hoàn thiện dự án, chọn "Production (no test)" —
+            main.cpp tự động chạy production code, không cần sửa code.
+
+        config TEST_MODE_NONE
+            bool "Production (no test)"
+        config TEST_MODE_BME680
+            bool "BME680 only"
+        config TEST_MODE_PMS5003
+            bool "PMS5003 only"
+        config TEST_MODE_MQ135
+            bool "MQ-135 only"
+        config TEST_MODE_ALL
+            bool "All sensors (via SensorManager)"
+    endchoice
+
 endmenu

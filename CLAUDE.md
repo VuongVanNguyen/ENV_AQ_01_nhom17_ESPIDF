@@ -62,7 +62,7 @@ idf_component_register(
 | File/Module | Trách nhiệm chính | ESP-IDF APIs liên quan |
 | :--- | :--- | :--- |
 | `main/SensorManager.cpp` | Driver BME680 (I2C), PMS5003 (UART), MQ-135 (ADC). | `i2c_master_*`, `uart_*`, `adc_oneshot_*` |
-| `main/Filters.cpp` | Bộ lọc Kalman/Moving Average; loại bỏ Outliers. | — |
+| `main/Filters.cpp` | Lọc nhiễu tín hiệu cảm biến: EMA cho T/P/Gas (BME680), SMA cho RH (BME680). Outlier rejection dùng sanity check theo range vật lý — không dùng delta-based threshold. Tham số từng kênh xem **Mục 7**. | — |
 | `main/DataFusion.cpp` | Hợp nhất dữ liệu, tính AQI (VN) và Comfort Index; Drift Self-Check. | — |
 | `main/DisplayManager.cpp` | Điều khiển LCD 16x2 thông qua IC mở rộng chân PCF8574 (I2C). | `i2c_master_*` |
 | `main/NetworkManager.cpp` | Quản lý WiFi, MQTT (JSON payload), xử lý Buffer khi mất mạng. | `esp_wifi_*`, `esp_mqtt_client_*` |
@@ -179,3 +179,99 @@ ESP-IDF Extension tích hợp sẵn OpenOCD và GDB — không cần cài thêm.
 - **Không xoá/comment các `ESP_LOG*` call** khi commit — đây là nguồn thông tin debug song song với JTAG.
 - **Mọi panic/exception phải được investigate bằng call stack** — không được chỉ reset lại mà không xác định nguyên nhân.
 - **Stack size của mỗi FreeRTOS task phải được kiểm tra** bằng `uxTaskGetStackHighWaterMark()` trong quá trình debug, trước khi release, để tránh stack overflow trong vận hành thực tế.
+
+## 7. Thiết kế Bộ lọc (Filter Design)
+
+### 7.1 Kiến trúc hai tầng
+
+```
+Raw sample → [Tầng 1: Sanity Check] → reject nếu giá trị vật lý vô lý (hardware fault)
+                                      ↓ pass
+                              [Tầng 2: EMA / SMA] → smoothed output → AirData
+```
+
+**Không dùng delta-based outlier rejection trong `Filters.cpp`** — threshold theo ΔX không phân biệt được sự kiện môi trường thật (ví dụ: Gas drop ~40% khi có VOC) với hardware glitch. Tầng 1 chỉ loại các giá trị nằm ngoài range vật lý khả dĩ của sensor.
+
+Gas baseline tracker (drift compensation dài hạn) **thuộc `DataFusion`**, không thuộc `Filters`.
+
+### 7.2 BME680 — đã xác nhận qua thực nghiệm
+
+**Sampling rate:** 2s/sample
+
+| Kênh | Filter | Tham số | Cơ sở thực nghiệm |
+| :--- | :--- | :--- | :--- |
+| Temperature | EMA | α = 0.10 | stdT = 0.005°C, tín hiệu rất sạch, thay đổi chậm |
+| Humidity | SMA | window = 3–5 | Có oscillation pattern (ADC quantization / HVAC); recovery breath event chỉ 3–4s |
+| Pressure | EMA | α = 0.10 | Ổn định, ít thay đổi |
+| Gas resistance | EMA | α = 0.25 | Drop ~43% trong 10s (~5 samples); α=0.25 bắt được ~76% biên độ drop |
+
+**Kết quả perturbation test (hà hơi 10s):**
+- Drop: ~174k → 99k Ω (~43%, ~75kΩ) trong 10s
+- Recovery: ~90–102s
+- dGas per sample khi drop: ~11–15k Ω/sample → vượt mọi delta threshold thực tế → xác nhận không dùng delta-based rejection
+
+**Sanity check range — BME680:**
+
+| Kênh | Min | Max |
+| :--- | :--- | :--- |
+| Temperature | -40°C | 85°C |
+| Humidity | 0% | 100% |
+| Pressure | 300 hPa | 1100 hPa |
+| Gas resistance | 1 kΩ | 500 kΩ |
+
+### 7.3 MQ-135 — tham số lý thuyết
+
+**Sampling rate:** 2s/sample
+
+| Kênh | Filter | Tham số | Cơ sở lý thuyết |
+| :--- | :--- | :--- | :--- |
+| CO2 ppm (sau bù T/RH) | EMA | α = 0.20 | MOX có quán tính nhiệt lớn (~0.8W heater) → lag-1 autocorrelation cao; α=0.20 bắt 75% biên độ sự kiện trong ~6.4 sample (~13s) — đủ bám sự kiện CO2 thổi hơi thở (~30s) |
+
+**Đặc điểm noise dự kiến:**
+- MQ-135 **không có internal averaging** (khác PMS5003) — output là tín hiệu analog thuần của phần tử MOX qua ADC 12-bit.
+- Quán tính nhiệt của gốm MOX tạo ra **lag-1 autocorrelation cao**: tín hiệu thay đổi liên tục, chậm → EMA tốt hơn SMA (SMA có độ trễ phẳng không khớp hệ thống first-order).
+- Không có impulse spike đơn lẻ — khối lượng nhiệt lớn ngăn nhảy đột ngột trong 1 sample → **Median không cần thiết**.
+- α=0.20 thận trọng hơn BME680 gas (α=0.25) vì heater MQ-135 lớn hơn nhiều (~0.8W vs ~4mW), hằng số thời gian nhiệt dài hơn → tín hiệu thay đổi chậm hơn → cần α nhỏ hơn.
+
+**Lưu ý bù T/RH và R0:**
+- T/RH compensation (`SensorManager::mq135CorrectionFactor`) chạy trước EMA — loại bỏ drift chậm do môi trường thay đổi.
+
+**Sanity check range — MQ-135:**
+
+| Kênh | Min | Max |
+| :--- | :--- | :--- |
+| CO2 ppm | 100 ppm | 5000 ppm |
+
+Không dùng delta-based rejection — noise analog liên tục, không có spike để reject. Tầng 1 chỉ là sanity check range.
+
+### 7.4 PMS5003 — đã xác nhận qua thực nghiệm
+
+**Sampling rate:** 1s/sample (sensor tự output 1 frame/giây)
+
+| Kênh | Filter | Tham số | Cơ sở thực nghiệm |
+| :--- | :--- | :--- | :--- |
+| PM1.0 | EMA | α = 0.50 | std ≈ 0.3–0.5 µg/m³, noise tương đồng PM2.5 |
+| PM2.5 | EMA | α = 0.50 | std ≈ 0.6–0.8 µg/m³, dPM25 thường = 0 hoặc ±1 |
+| PM10  | EMA | α = 0.30 | std ≈ 0.7–1+ µg/m³, noisier ~1.5× PM2.5 do hạt lớn ít hơn |
+
+**Đặc điểm noise quan sát được:**
+- PMS5003 đã thực hiện heavy internal averaging trong firmware chip trước khi xuất UART — output là tín hiệu đã lọc sẵn.
+- Noise hoàn toàn là **integer quantization** (±1 LSB): dPM max = 3 µg/m³ kể cả khi có perturbation (giũ gối).
+- **Không có impulse spike** — spike_rate = 0 tại mọi ngưỡng trong suốt quá trình test.
+- mad/std ratio ≈ 0.6 (thấp hơn Gaussian lý thuyết 0.80 vì phần lớn delta = 0).
+- PM10 noisier hơn PM2.5 do counting statistics kém ổn định hơn (ít hạt lớn trong không khí).
+
+**Kết quả perturbation test (giũ gối gần sensor):**
+- Rise: chậm, dPM25 không vượt quá 3 µg/m³/sample ngay cả khi perturbation mạnh.
+- Decay: chậm tương tự, monotonic.
+- Xác nhận: sensor không có impulse noise, không cần Median filter.
+
+**Sanity check range — PMS5003:**
+
+| Kênh | Min | Max |
+| :--- | :--- | :--- |
+| PM1.0 | 0 µg/m³ | 500 µg/m³ |
+| PM2.5 | 0 µg/m³ | 500 µg/m³ |
+| PM10  | 0 µg/m³ | 500 µg/m³ |
+
+Không dùng delta-based rejection (không có spike để reject). Tầng 1 chỉ là sanity check range.

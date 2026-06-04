@@ -62,8 +62,29 @@ inline constexpr uint32_t MQ135_ADC_DEFAULT_VREF_MV = 1100; // mV — điện á
 
 // Hệ số chuyển đổi điện áp → nồng độ (cần hiệu chuẩn thực tế)
 inline constexpr float    MQ135_VREF        = 3.3f;       // V
-inline constexpr float    MQ135_RL_KOHM     = 10.0f;      // Điện trở tải (kΩ)
-inline constexpr float    MQ135_RO_KOHM     = 10.0f;      // Điện trở cơ sở trong không khí sạch
+inline constexpr float    MQ135_RL_KOHM     = 1.0f;       // Điện trở tải (kΩ) — ký hiệu "102" trên module = 1kΩ
+inline constexpr float    MQ135_RO_KOHM     = 7.93f;      // kΩ — R0_corrected = Rs_clean(4.35)/RATIO_CLEAN_AIR(0.624) / CF(32°C,75%RH=0.8792); đã tính lại sau khi bật T/RH compensation
+
+// Đường cong CO2 — hệ số từ MQUnifiedsensor, tham chiếu CO2 khí quyển 2026 (~426 ppm)
+// Công thức: ppm = MQ135_CURVE_A * (Rs_comp/R0) ^ MQ135_CURVE_B
+// Rs_comp = Rs / CF(T, RH)  ← chuẩn hóa Rs về 20°C/65%RH trước khi áp dụng power-law
+inline constexpr float    MQ135_CURVE_A     = 110.47f;
+inline constexpr float    MQ135_CURVE_B     = -2.8612f;
+
+// Bù nhiệt/ẩm — piecewise linear fit từ đường cong datasheet MQ-135 (GeorgK 2015)
+// Điều kiện tham chiếu: 20°C / 65%RH.
+// CF (T < 20°C):  CORA·T² − CORB·T + CORC − (RH−33)·CORD
+// CF (T ≥ 20°C):  CORE·T  + CORF·RH + CORG
+// ⚠️  R0 (MQ135_RO_KOHM) nên được đo lại sau khi bật correction để sai số tuyệt đối là nhỏ nhất.
+inline constexpr float    MQ135_TREF_C      = 20.0f;
+inline constexpr float    MQ135_RHREF_PCT   = 65.0f;
+inline constexpr float    MQ135_CORA        =  0.00035f;
+inline constexpr float    MQ135_CORB        =  0.02718f;
+inline constexpr float    MQ135_CORC        =  1.39538f;
+inline constexpr float    MQ135_CORD        =  0.0018f;
+inline constexpr float    MQ135_CORE        = -0.003333333f;
+inline constexpr float    MQ135_CORF        = -0.001923077f;
+inline constexpr float    MQ135_CORG        =  1.130128205f;
 
 // ============================================================
 // 4. SD CARD — SPI
@@ -142,17 +163,33 @@ inline constexpr const char *NTP_SERVER_URL    = CONFIG_NTP_SERVER_URL;  // SNTP
 inline constexpr int         MQTT_JSON_BUF_LEN = 512;   // Byte — đủ cho toàn bộ AirData
 
 // ============================================================
-// 10. BỘ LỌC NHIỄU (Filters)
+// 10. BỘ LỌC NHIỄU (Filters) — EMA/SMA hai tầng (CLAUDE.md Mục 7)
 // ============================================================
 
-inline constexpr size_t   FILTER_WINDOW_SIZE   = 5;     // Cửa sổ moving average
+inline constexpr size_t   FILTER_WINDOW_SIZE   = 5;     // Cửa sổ SMA humidity (hợp lệ 3..5)
 
-// Kalman — giá trị mặc định cho tất cả tín hiệu
-inline constexpr float    KALMAN_PROCESS_NOISE = 0.01f; // Q: dao động mô hình
-inline constexpr float    KALMAN_MEAS_NOISE    = 0.1f;  // R: nhiễu đo lường
+// EMA alpha — hệ số làm trơn theo từng kênh (Mục 7.2 / 7.3 / 7.4)
+inline constexpr float    EMA_ALPHA_TEMP       = 0.10f; // BME680 temperature
+inline constexpr float    EMA_ALPHA_PRESS      = 0.10f; // BME680 pressure
+inline constexpr float    EMA_ALPHA_GAS        = 0.25f; // BME680 gas resistance
+inline constexpr float    EMA_ALPHA_CO2        = 0.20f; // MQ-135 CO2 ppm (sau bù T/RH)
+inline constexpr float    EMA_ALPHA_PM1        = 0.50f; // PMS5003 PM1.0
+inline constexpr float    EMA_ALPHA_PM25       = 0.50f; // PMS5003 PM2.5
+inline constexpr float    EMA_ALPHA_PM10       = 0.30f; // PMS5003 PM10
 
-// Outlier rejection — loại bỏ nếu lệch quá N lần độ lệch chuẩn
-inline constexpr float    OUTLIER_SIGMA        = 3.0f;
+// Sanity check range — Tầng 1 (range vật lý khả dĩ của từng sensor)
+inline constexpr float    SANITY_TEMP_MIN      =   -40.0f;   // °C
+inline constexpr float    SANITY_TEMP_MAX      =    85.0f;   // °C
+inline constexpr float    SANITY_HUMI_MIN      =     0.0f;   // %RH
+inline constexpr float    SANITY_HUMI_MAX      =   100.0f;   // %RH
+inline constexpr float    SANITY_PRESS_MIN     =   300.0f;   // hPa
+inline constexpr float    SANITY_PRESS_MAX     =  1100.0f;   // hPa
+inline constexpr float    SANITY_GAS_MIN       =  1000.0f;   // Ω (1 kΩ = 1000 Ω)
+inline constexpr float    SANITY_GAS_MAX       = 500000.0f;  // Ω (500 kΩ = 500000 Ω)
+inline constexpr float    SANITY_CO2_MIN       =   100.0f;   // ppm
+inline constexpr float    SANITY_CO2_MAX       =  5000.0f;   // ppm
+inline constexpr float    SANITY_PM_MIN        =     0.0f;   // µg/m³
+inline constexpr float    SANITY_PM_MAX        =   500.0f;   // µg/m³
 
 // ============================================================
 // 11. HIỆU CHUẨN & DRIFT SELF-CHECK

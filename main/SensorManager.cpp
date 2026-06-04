@@ -153,8 +153,9 @@ esp_err_t SensorManager::readAll(AirData &out) {
                         && (pms_valid_streak_ >= Cfg::PMS_VALID_STREAK_OK);
 
     // ---------- MQ-135 ----------
+    // t và rh đã được đọc từ BME680 phía trên — dùng để chuẩn hóa Rs về 20°C/65%RH.
     float co2 = 0;
-    err = mq135ReadPpm(co2);
+    err = mq135ReadPpm(co2, t, rh);
     if (err == ESP_OK) {
         out.co2_ppm = co2;
     }
@@ -430,7 +431,22 @@ esp_err_t SensorManager::mq135Init() {
     return ESP_OK;
 }
 
-esp_err_t SensorManager::mq135ReadPpm(float &co2_ppm) {
+// Hệ số bù nhiệt/ẩm GeorgK 2015 — piecewise linear fit từ đường cong datasheet MQ-135.
+// Trả về CF để caller tính Rs_comp = Rs / CF, qua đó chuẩn hóa Rs về 20°C/65%RH.
+// Dùng hằng số từ Cfg::MQ135_COR* — không hardcode giá trị nào.
+float SensorManager::mq135CorrectionFactor(float t_c, float rh_pct) {
+    if (t_c < Cfg::MQ135_TREF_C) {
+        return Cfg::MQ135_CORA * t_c * t_c
+             - Cfg::MQ135_CORB * t_c
+             + Cfg::MQ135_CORC
+             - (rh_pct - 33.0f) * Cfg::MQ135_CORD;
+    }
+    return Cfg::MQ135_CORE * t_c
+         + Cfg::MQ135_CORF * rh_pct
+         + Cfg::MQ135_CORG;
+}
+
+esp_err_t SensorManager::mq135ReadPpm(float &co2_ppm, float t_c, float rh_pct) {
     int raw = 0;
     esp_err_t err = adc_oneshot_read(adc_handle_,
                                      static_cast<adc_channel_t>(Cfg::MQ135_ADC_CHANNEL),
@@ -451,11 +467,16 @@ esp_err_t SensorManager::mq135ReadPpm(float &co2_ppm) {
         co2_ppm = 0.0f;
         return ESP_OK;
     }
-    // RS = (Vc - VRL) * RL / VRL; ratio = RS / R0
-    float rs    = (Cfg::MQ135_VREF - vrl) * Cfg::MQ135_RL_KOHM / vrl;
-    float ratio = rs / Cfg::MQ135_RO_KOHM;
 
-    // Đường cong CO2 đặc trưng MQ-135 (datasheet): ppm = 116.6020682 * ratio^-2.769
-    co2_ppm = 116.6020682f * powf(ratio, -2.769034857f);
+    // Rs = (Vc − VRL) × RL / VRL
+    float rs = (Cfg::MQ135_VREF - vrl) * Cfg::MQ135_RL_KOHM / vrl;
+
+    // Chuẩn hóa Rs về điều kiện tham chiếu (20°C/65%RH) trước khi áp dụng power-law
+    float cf      = mq135CorrectionFactor(t_c, rh_pct);
+    float rs_comp = (cf > 0.001f) ? rs / cf : rs;
+    float ratio   = rs_comp / Cfg::MQ135_RO_KOHM;
+
+    // ppm = A × (Rs_comp/R0)^B — hệ số MQUnifiedsensor, R0 cần đo lại sau khi bật correction
+    co2_ppm = Cfg::MQ135_CURVE_A * powf(ratio, Cfg::MQ135_CURVE_B);
     return ESP_OK;
 }

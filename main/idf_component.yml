@@ -17,3 +17,5 @@ dependencies:
   espressif/mqtt: '*'
   espressif/cjson: '*'
   esp-idf-lib/bme680: '*'
+  esp-idf-lib/hd44780: '*'
+  esp-idf-lib/pcf8574: '*'

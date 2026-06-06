@@ -83,7 +83,7 @@ void Filters::processBme680(AirData &data) {
             ? emaUpdate(ema_temp_, data.temperature, Cfg::EMA_ALPHA_TEMP)
             : emaWarmStart(ema_temp_, data.temperature);
     } else {
-        ESP_LOGW(TAG, "Temp reject: %.2f°C [%.0f, %.0f]",
+        ESP_LOGW(TAG, "Nhiệt độ ngoài mức cho phép: %.2f°C [%.0f, %.0f]",
                  data.temperature, Cfg::SANITY_TEMP_MIN, Cfg::SANITY_TEMP_MAX);
         if (ema_temp_.initialized) { data.temperature = ema_temp_.prev; }
     }
@@ -92,7 +92,7 @@ void Filters::processBme680(AirData &data) {
     if (inRange(data.humidity, Cfg::SANITY_HUMI_MIN, Cfg::SANITY_HUMI_MAX)) {
         data.humidity = smaUpdate(sma_humi_, data.humidity);
     } else {
-        ESP_LOGW(TAG, "Humi reject: %.2f%% [%.0f, %.0f]",
+        ESP_LOGW(TAG, "Độ ẩm ngoài mức cho phép: %.2f%% [%.0f, %.0f]",
                  data.humidity, Cfg::SANITY_HUMI_MIN, Cfg::SANITY_HUMI_MAX);
         if (sma_humi_.count > 0) { data.humidity = sma_humi_.last_output; }
     }
@@ -103,7 +103,7 @@ void Filters::processBme680(AirData &data) {
             ? emaUpdate(ema_press_, data.pressure, Cfg::EMA_ALPHA_PRESS)
             : emaWarmStart(ema_press_, data.pressure);
     } else {
-        ESP_LOGW(TAG, "Pressure reject: %.2f hPa [%.0f, %.0f]",
+        ESP_LOGW(TAG, "Áp suất ngoài mức cho phép: %.2f hPa [%.0f, %.0f]",
                  data.pressure, Cfg::SANITY_PRESS_MIN, Cfg::SANITY_PRESS_MAX);
         if (ema_press_.initialized) { data.pressure = ema_press_.prev; }
     }
@@ -115,7 +115,7 @@ void Filters::processBme680(AirData &data) {
             ? emaUpdate(ema_gas_, data.gas_resistance, Cfg::EMA_ALPHA_GAS)
             : emaWarmStart(ema_gas_, data.gas_resistance);
     } else {
-        ESP_LOGW(TAG, "Gas reject: %.0f Ohm [%.0f, %.0f]",
+        ESP_LOGW(TAG, "Khí gas ngoài mức cho phép: %.0f Ohm [%.0f, %.0f]",
                  data.gas_resistance, Cfg::SANITY_GAS_MIN, Cfg::SANITY_GAS_MAX);
         if (ema_gas_.initialized) { data.gas_resistance = ema_gas_.prev; }
     }
@@ -135,7 +135,7 @@ void Filters::processMq135(AirData &data) {
             ? emaUpdate(ema_co2_, data.co2_ppm, Cfg::EMA_ALPHA_CO2)
             : emaWarmStart(ema_co2_, data.co2_ppm);
     } else {
-        ESP_LOGW(TAG, "CO2 reject: %.1f ppm [%.0f, %.0f]",
+        ESP_LOGW(TAG, "CO2 ngoài mức cho phép: %.1f ppm [%.0f, %.0f]",
                  data.co2_ppm, Cfg::SANITY_CO2_MIN, Cfg::SANITY_CO2_MAX);
         if (ema_co2_.initialized) { data.co2_ppm = ema_co2_.prev; }
     }
@@ -174,7 +174,7 @@ void Filters::processPms5003(AirData &data) {
             data.pm1_0 = static_cast<uint16_t>(
                 std::clamp(lroundf(f), 0L, pm_max));
         } else {
-            ESP_LOGW(TAG, "PM1.0 reject: %u ug/m3 [%.0f, %.0f]",
+            ESP_LOGW(TAG, "PM1.0 ngoài mức cho phép: %u ug/m3 [%.0f, %.0f]",
                      data.pm1_0, Cfg::SANITY_PM_MIN, Cfg::SANITY_PM_MAX);
             if (ema_pm1_.initialized) {
                 data.pm1_0 = static_cast<uint16_t>(
@@ -193,7 +193,7 @@ void Filters::processPms5003(AirData &data) {
             data.pm2_5 = static_cast<uint16_t>(
                 std::clamp(lroundf(f), 0L, pm_max));
         } else {
-            ESP_LOGW(TAG, "PM2.5 reject: %u ug/m3 [%.0f, %.0f]",
+            ESP_LOGW(TAG, "PM2.5 ngoài mức cho phép: %u ug/m3 [%.0f, %.0f]",
                      data.pm2_5, Cfg::SANITY_PM_MIN, Cfg::SANITY_PM_MAX);
             if (ema_pm25_.initialized) {
                 data.pm2_5 = static_cast<uint16_t>(
@@ -212,7 +212,7 @@ void Filters::processPms5003(AirData &data) {
             data.pm10 = static_cast<uint16_t>(
                 std::clamp(lroundf(f), 0L, pm_max));
         } else {
-            ESP_LOGW(TAG, "PM10 reject: %u ug/m3 [%.0f, %.0f]",
+            ESP_LOGW(TAG, "PM10 ngoài mức cho phép: %u ug/m3 [%.0f, %.0f]",
                      data.pm10, Cfg::SANITY_PM_MIN, Cfg::SANITY_PM_MAX);
             if (ema_pm10_.initialized) {
                 data.pm10 = static_cast<uint16_t>(

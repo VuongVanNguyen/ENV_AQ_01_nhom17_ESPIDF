@@ -29,6 +29,8 @@ idf_component_register(
         cjson
         lwip
         freertos
+        hd44780
+        pcf8574
         bme680      # esp-idf-lib/bme680 (driver chính cho cảm biến T/RH/P/Gas)
         i2cdev      # esp-idf-lib/i2cdev — cần cho i2cdev_init() chia sẻ bus I2C
 )

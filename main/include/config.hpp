@@ -140,6 +140,11 @@ inline constexpr float    AQI_MODERATE_MAX = static_cast<float>(CONFIG_AQI_MODER
 inline constexpr float    AQI_POOR_MAX     = static_cast<float>(CONFIG_AQI_POOR_MAX);
 inline constexpr float    AQI_BAD_MAX      = static_cast<float>(CONFIG_AQI_BAD_MAX);
 inline constexpr float    AQI_VERY_BAD_MAX = static_cast<float>(CONFIG_AQI_VERY_BAD_MAX);
+
+// AQI breakpoints theo tiêu chuẩn VN
+inline constexpr float    AQI_INDEX_BP[]   = {0.0f, 50.0f, 100.0f, 150.0f, 200.0f, 300.0f, 500.0f};
+inline constexpr float    AQI_PM25_BP[]    = {0.0f, 25.0f, 50.0f, 80.0f, 150.0f, 250.0f, 500.0f};
+inline constexpr float    AQI_PM10_BP[]    = {0.0f, 50.0f, 150.0f, 250.0f, 350.0f, 420.0f, 600.0f};
 // > AQI_VERY_BAD_MAX → category 5 (Nguy hại)
 
 // ============================================================
@@ -217,6 +222,7 @@ inline constexpr const char *NVS_KEY_BL_TEMP       = "bl_temp";
 inline constexpr const char *NVS_KEY_BL_HUMI       = "bl_humi";
 inline constexpr const char *NVS_KEY_BL_PM25       = "bl_pm25";
 inline constexpr const char *NVS_KEY_BL_CO2        = "bl_co2";
+inline constexpr const char *NVS_KEY_BL_GAS        = "bl_gas";
 inline constexpr const char *NVS_KEY_LAST_CALIB_TS = "last_calib_ts";
 
 // ============================================================

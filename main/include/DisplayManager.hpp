@@ -68,6 +68,15 @@ private:
     char shadow_[2][17] = {0};         // Buffer chứa nội dung MUỐN hiển thị
     char current_display_[2][17] = {0}; // Buffer chứa nội dung ĐANG hiển thị thực tế
 
+    // Trạng thái nhấp nháy (Blink) backlight cho CALIB_ALERT — đảo mỗi lần
+    // tick() được gọi trong khi current_state_ == CALIB_ALERT.
+    bool blink_state_ = true;
+
+    // Overlay cho showMessage(): giữ thông báo tối thiểu Cfg::LCD_OVERLAY_MIN_MS
+    // trước khi update() được phép vẽ lại frame trạng thái bình thường.
+    bool overlay_active_ = false;
+    int64_t overlay_expire_us_ = 0;
+
     // Callback ghi I2C bắt buộc phải có để truyền cho hd44780_init
     static esp_err_t write_cb(const hd44780_t *lcd, uint8_t data);
 

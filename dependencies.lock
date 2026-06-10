@@ -43,6 +43,24 @@ dependencies:
     - esp32s2
     - esp32s3
     version: 1.4.0
+  esp-idf-lib/hd44780:
+    component_hash: 61dbd00fd6c41489d01c70db4350617e16d0f99bd6deb81cfed5b30c9c298cf4
+    dependencies: []
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    targets:
+    - esp32
+    - esp32c2
+    - esp32c3
+    - esp32c5
+    - esp32c6
+    - esp32c61
+    - esp32h2
+    - esp32p4
+    - esp32s2
+    - esp32s3
+    version: 1.3.0
   esp-idf-lib/i2cdev:
     component_hash: 9e22a91420695242ceac2c00788820ae45826224d38ef003a1a894367c55ede4
     dependencies:
@@ -65,6 +83,32 @@ dependencies:
     - esp32s2
     - esp32s3
     version: 2.1.1
+  esp-idf-lib/pcf8574:
+    component_hash: 59283ee5b234c85c3e217c45c4d2bebe6d55b2371d8a85c97d5faefe3943e82f
+    dependencies:
+    - name: esp-idf-lib/esp_idf_lib_helpers
+      registry_url: https://components.espressif.com
+      require: private
+      version: '*'
+    - name: esp-idf-lib/i2cdev
+      registry_url: https://components.espressif.com
+      require: private
+      version: '*'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    targets:
+    - esp32
+    - esp32c2
+    - esp32c3
+    - esp32c5
+    - esp32c6
+    - esp32c61
+    - esp32h2
+    - esp32p4
+    - esp32s2
+    - esp32s3
+    version: 1.0.10
   espressif/cjson:
     component_hash: e788323270d90738662d66fffa910bfe1fba019bba087f01557e70c40485b469
     dependencies:
@@ -91,9 +135,11 @@ dependencies:
     version: 6.0.1
 direct_dependencies:
 - esp-idf-lib/bme680
+- esp-idf-lib/hd44780
+- esp-idf-lib/pcf8574
 - espressif/cjson
 - espressif/mqtt
 - idf
-manifest_hash: 7e426b93c638720b744307b91f911e9f7093d9d2cb3acc21ff00c83341c52268
+manifest_hash: 2e96c5be487460999ebd5cee457a8fbf53a577a4a6cc412585917f71a4284635
 target: esp32
 version: 3.0.0

@@ -24,6 +24,12 @@ inline constexpr int      I2C_SDA_PIN       = 21;
 inline constexpr int      I2C_SCL_PIN       = 22;
 inline constexpr uint32_t I2C_FREQ_HZ       = 400'000;   // Fast Mode 400 kHz
 
+// Port I2C dùng chung cho TOÀN BỘ thiết bị trên bus (BME680 + PCF8574).
+// SensorManager::bme680Setup() và DisplayManager::init() PHẢI cùng tham
+// chiếu hằng số này — không tự khai báo số port rời rạc ở module khác,
+// nếu không mutex per-port của i2cdev sẽ không serialize đúng truy cập.
+inline constexpr int      I2C_PORT          = 0;         // I2C_NUM_0
+
 // ---- Địa chỉ thiết bị trên bus I2C dùng chung ----
 inline constexpr uint8_t  BME680_I2C_ADDR   = 0x76;      // SDO = GND
 inline constexpr uint8_t  PCF8574_I2C_ADDR  = 0x20;      // A0/A1/A2 = GND
@@ -121,6 +127,11 @@ inline constexpr uint32_t MAX_CYCLE_TIME_MS          = 300;    // Tổng chu k�
 inline constexpr uint32_t ALERT_MAX_LATENCY_MS       = 3'000;  // Cảnh báo phải phát trong 3s
 inline constexpr uint32_t LCD_MIN_INTERVAL_MS        = 2'000;  // Giới hạn dưới cập nhật LCD
 inline constexpr uint32_t LCD_MAX_INTERVAL_MS        = 5'000;  // Giới hạn trên cập nhật LCD
+
+// Thời lượng tối thiểu giữ overlay message (DisplayManager::showMessage)
+// trước khi update() được phép vẽ lại frame trạng thái bình thường —
+// đảm bảo người dùng kịp đọc thông báo tức thời (vd "Mất mạng").
+inline constexpr uint32_t LCD_OVERLAY_MIN_MS         = 5'000;
 
 // ---- Warmup / Stabilization các cảm biến ----
 // Tính từ thời điểm SensorManager::init() trả ESP_OK. Trước khi hết

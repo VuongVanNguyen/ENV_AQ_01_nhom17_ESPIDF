@@ -1,6 +1,7 @@
 
 #include "DisplayManager.hpp"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include <cstdio>
 #include <cstring>
 #include "freertos/FreeRTOS.h"
@@ -32,7 +33,9 @@ esp_err_t DisplayManager::init() {
 
   // 1. Cấu hình PCF8574 descriptor
     // Lưu ý: Ép kiểu (gpio_num_t) để chiều lòng C++
-    ESP_ERROR_CHECK(pcf8574_init_desc(&pcf_, Cfg::PCF8574_I2C_ADDR, (i2c_port_t)0, (gpio_num_t)Cfg::I2C_SDA_PIN, (gpio_num_t)Cfg::I2C_SCL_PIN));
+    // Dùng chung Cfg::I2C_PORT với SensorManager::bme680Setup() (CLAUDE.md §4)
+    // — bắt buộc để mutex per-port của i2cdev serialize đúng BME680 + PCF8574.
+    ESP_ERROR_CHECK(pcf8574_init_desc(&pcf_, Cfg::PCF8574_I2C_ADDR, static_cast<i2c_port_t>(Cfg::I2C_PORT), (gpio_num_t)Cfg::I2C_SDA_PIN, (gpio_num_t)Cfg::I2C_SCL_PIN));
     s_pcf_ptr = &pcf_;
 
     // 2. Cấu hình driver HD44780
@@ -44,7 +47,10 @@ esp_err_t DisplayManager::init() {
     lcd_.font = HD44780_FONT_5X8;
     lcd_.lines = 2;
     
-    // Khai báo chân (Pinout)
+    // Khai báo chân (Pinout) — khớp CLAUDE.md §5.
+    // [GHI CHÚ] hd44780_t KHÔNG có field cho RW (P1): driver không bao giờ set
+    //   bit 1 → P1 luôn = 0 = LOW = write-mode (đúng yêu cầu). Đây là điều kiện
+    //   PHẦN CỨNG bắt buộc: RW phải nối P1 và không bị kéo HIGH ở ngoài.
     lcd_.pins.rs = 0;
     lcd_.pins.e  = 2;
     lcd_.pins.d4 = 4;
@@ -86,6 +92,15 @@ esp_err_t DisplayManager::init() {
 void DisplayManager::update(const AirData &data) {
     if (!initialized_) return;
 
+    // Overlay message (showMessage) đang trong thời gian giữ tối thiểu —
+    // bỏ qua render trạng thái thường để người dùng kịp đọc thông báo.
+    if (overlay_active_) {
+        if (esp_timer_get_time() < overlay_expire_us_) {
+            return;
+        }
+        overlay_active_ = false;
+    }
+
     evaluateState(data);
 
     // Xóa sạch buffer ảo bằng phím Space trước khi vẽ frame mới
@@ -114,12 +129,21 @@ void DisplayManager::update(const AirData &data) {
 }
 
 void DisplayManager::evaluateState(const AirData &data) {
+    DisplayState prev_state = current_state_;
+
     if (data.calib_needed) {
         current_state_ = DisplayState::CALIB_ALERT;
     } else if (!data.sensors_ready) {
         current_state_ = DisplayState::WARMING_UP;
     } else {
         current_state_ = DisplayState::NORMAL;
+    }
+
+    // Rời khỏi CALIB_ALERT: tick() có thể đã tắt backlight để nhấp nháy —
+    // đảm bảo bật lại và reset nhịp blink cho lần cảnh báo kế tiếp.
+    if (prev_state == DisplayState::CALIB_ALERT && current_state_ != DisplayState::CALIB_ALERT) {
+        blink_state_ = true;
+        hd44780_switch_backlight(&lcd_, true);
     }
 }
 
@@ -129,7 +153,11 @@ void DisplayManager::evaluateState(const AirData &data) {
 void DisplayManager::renderToShadow(const AirData &data) {
     switch (current_page_) {
         case ScreenPage::TEMP_HUMI:
-            snprintf(shadow_[0], 17, "T:%04.1f\x08" "C H:%02d%%", data.temperature, (int)data.humidity); // \x08 là slot 0 (độ)
+            // Độ rộng cố định: %5.1f cho temperature (dải sanity -40.0..85.0
+            // → tối đa "-40.0" = 5 ký tự) và %3d cho humidity (dải sanity
+            // 0..100 → tối đa "100" = 3 ký tự). Tổng = 16 ký tự cho mọi giá
+            // trị hợp lệ — không bao giờ tràn hay lệch cột.
+            snprintf(shadow_[0], 17, "T:%5.1f\x08" "C H:%3d%%", data.temperature, (int)data.humidity); // \x08 là slot 0 (độ)
             snprintf(shadow_[1], 17, "P:%04d hPa", (int)data.pressure);
             break;
 
@@ -192,16 +220,28 @@ void DisplayManager::tick() {
             next_page = 0;
         }
         current_page_ = static_cast<ScreenPage>(next_page);
+    } else if (current_state_ == DisplayState::CALIB_ALERT) {
+        // Nhấp nháy backlight theo nhịp gọi tick() — tách rời khỏi Rotate
+        // (chỉ áp dụng cho NORMAL ở trên) để cảnh báo tái hiệu chuẩn không
+        // bị bỏ sót (NFR §3 độ trễ cảnh báo & ổn định dài hạn).
+        blink_state_ = !blink_state_;
+        hd44780_switch_backlight(&lcd_, blink_state_);
     }
 }
 
 void DisplayManager::showMessage(const char *line1, const char *line2) {
     if (!initialized_) return;
-    
+
     memset(shadow_, ' ', sizeof(shadow_));
     if (line1) snprintf(shadow_[0], 17, "%-16s", line1); // Căn trái, bù space
     if (line2) snprintf(shadow_[1], 17, "%-16s", line2);
-    
+
+    // Giữ overlay tối thiểu Cfg::LCD_OVERLAY_MIN_MS — update() sẽ bỏ qua
+    // render trạng thái thường cho tới khi mốc thời gian này trôi qua,
+    // tránh thông báo bị ghi đè ngay ở chu kỳ kế tiếp.
+    overlay_active_ = true;
+    overlay_expire_us_ = esp_timer_get_time() + static_cast<int64_t>(Cfg::LCD_OVERLAY_MIN_MS) * 1000;
+
     commitDirtyCheck();
 }
 

@@ -5,11 +5,11 @@
 // Kiến trúc dựa trên esp-idf-lib (hd44780 + pcf8574 trên nền i2cdev)
 // ============================================================================
 
-#include "DataStructures.hpp" // Khai báo struct AirData (READ-ONLY)
-#include "config.hpp"         // Khai báo namespace Cfg cho các hằng số
+#include "DataStructures.hpp" 
+#include "config.hpp"         
 #include "esp_err.h"
-#include <hd44780.h>          // Driver LCD từ esp-idf-lib
-#include <pcf8574.h>          // Driver I/O expander từ esp-idf-lib
+#include <hd44780.h>          
+#include <pcf8574.h>          
 
 // §4. ENUM CẦN KHAI BÁO
 enum class ScreenPage : uint8_t {

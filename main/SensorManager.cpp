@@ -197,7 +197,7 @@ esp_err_t SensorManager::bme680Setup() {
     // port; lần đầu device được tạo → port bus được khởi tạo lazy.
     esp_err_t err = bme680_init_desc(&bme680_dev_,
                                      Cfg::BME680_I2C_ADDR,
-                                     static_cast<i2c_port_t>(0),         // I2C_NUM_0
+                                     static_cast<i2c_port_t>(Cfg::I2C_PORT),
                                      static_cast<gpio_num_t>(Cfg::I2C_SDA_PIN),
                                      static_cast<gpio_num_t>(Cfg::I2C_SCL_PIN));
     if (err != ESP_OK) return err;

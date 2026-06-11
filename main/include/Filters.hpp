@@ -16,7 +16,7 @@
 //     - Làm sạch AirData tại chỗ (in-place) — không cấp phát struct mới.
 //
 //   Ranh giới trách nhiệm:
-//     KHÔNG tính AQI/Comfort/TVOC (thuộc DataFusion).
+//     KHÔNG tính AQI/Comfort (thuộc DataFusion).
 //     KHÔNG bù T/RH cho MQ-135 (SensorManager đã làm trước).
 //     KHÔNG đọc cảm biến, không I/O, không blocking.
 // ============================================================

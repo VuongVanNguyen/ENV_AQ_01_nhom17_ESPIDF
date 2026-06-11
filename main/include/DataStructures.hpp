@@ -24,8 +24,7 @@ struct AirData {
     uint16_t pm10;          // µg/m³
 
     // ---- MQ-135 ----
-    float co2_ppm;
-    float tvoc_ppm;
+    float co2_ppm;          // ppm (CO2 quy đổi + bù T/RH tại SensorManager, EMA tại Filters)
 
     // ---- Chỉ số tính toán ----
     float aqi;              // AQI theo tiêu chuẩn Việt Nam

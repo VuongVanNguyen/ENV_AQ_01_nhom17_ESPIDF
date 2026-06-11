@@ -279,4 +279,15 @@ inline constexpr float    COMFORT_DI_WARM     = 24.0f;
 inline constexpr float    COMFORT_DI_HOT      = 27.0f;
 inline constexpr float    COMFORT_DI_SEVERE   = 29.0f;
 
+// ============================================================
+// 15. CO2 — DẢI PHÂN LOẠI ĐỊNH TÍNH (DisplayManager)
+// ============================================================
+// Tham chiếu ASHRAE: <1000ppm thông gió tốt, 1000-2000ppm gây buồn ngủ/giảm
+// tập trung, >2000ppm kém. Dùng để ánh xạ data.co2_ppm -> nhãn "Tot/TB/Xau".
+//   CO2 <= CO2_GOOD_MAX            : Tot
+//   CO2_GOOD_MAX < CO2 <= MODERATE : TB
+//   CO2 > CO2_MODERATE_MAX         : Xau
+inline constexpr float    CO2_GOOD_MAX     = 1000.0f; // ppm
+inline constexpr float    CO2_MODERATE_MAX = 2000.0f; // ppm
+
 } // namespace Cfg

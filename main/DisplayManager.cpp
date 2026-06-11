@@ -151,36 +151,59 @@ void DisplayManager::evaluateState(const AirData &data) {
 // RENDER NỘI DUNG RA BUFFER ẢO (O(1) String Formatting)
 // ============================================================================
 void DisplayManager::renderToShadow(const AirData &data) {
+    // 2/3 trang (MAIN_AQI, MAIN_THI) ưu tiên 3 chỉ số chính AQI/THI/CO2 (kèm nhãn
+    // định tính); 1/3 trang (DETAIL) là nhóm phụ T/RH/P — đúng tỉ lệ ưu tiên CLAUDE.md §3.
     switch (current_page_) {
-        case ScreenPage::TEMP_HUMI:
+        case ScreenPage::MAIN_AQI:
+            {
+                const char* aqi_labels[] = {"Tot", "TB", "Kem", "Xau", "R.Xau", "Nguy"};
+                uint8_t aqi_cat = (data.aqi_category <= 5) ? data.aqi_category : 5;
+                snprintf(shadow_[0], 17, "AQI:%03d %s", (int)data.aqi, aqi_labels[aqi_cat]);
+
+                // Phân loại CO2 theo Cfg::CO2_GOOD_MAX/CO2_MODERATE_MAX (config.hpp §15)
+                const char* co2_labels[] = {"Tot", "TB", "Xau"};
+                uint8_t co2_cat;
+                if (data.co2_ppm <= Cfg::CO2_GOOD_MAX) {
+                    co2_cat = 0;
+                } else if (data.co2_ppm <= Cfg::CO2_MODERATE_MAX) {
+                    co2_cat = 1;
+                } else {
+                    co2_cat = 2;
+                }
+                snprintf(shadow_[1], 17, "CO2:%04d ppm %s", (int)data.co2_ppm, co2_labels[co2_cat]);
+            }
+            break;
+
+        case ScreenPage::MAIN_THI:
+            {
+                // Phân loại THI theo Cfg::COMFORT_DI_OK/WARM/HOT/SEVERE (config.hpp §14)
+                const char* thi_labels[] = {"Tot", "Am", "Nong", "Kho", "Nguy"};
+                uint8_t thi_cat;
+                if (data.comfort_index < Cfg::COMFORT_DI_OK) {
+                    thi_cat = 0;
+                } else if (data.comfort_index < Cfg::COMFORT_DI_WARM) {
+                    thi_cat = 1;
+                } else if (data.comfort_index < Cfg::COMFORT_DI_HOT) {
+                    thi_cat = 2;
+                } else if (data.comfort_index < Cfg::COMFORT_DI_SEVERE) {
+                    thi_cat = 3;
+                } else {
+                    thi_cat = 4;
+                }
+                snprintf(shadow_[0], 17, "THI:%4.1f %s", data.comfort_index, thi_labels[thi_cat]);
+
+                // Dùng % 1000 để cam kết với compiler số này chỉ có tối đa 3 chữ số
+                snprintf(shadow_[1], 17, "PM25:%03d P10:%03d", (unsigned int)data.pm2_5 % 1000, (unsigned int)data.pm10 % 1000);
+            }
+            break;
+
+        case ScreenPage::DETAIL:
             // Độ rộng cố định: %5.1f cho temperature (dải sanity -40.0..85.0
             // → tối đa "-40.0" = 5 ký tự) và %3d cho humidity (dải sanity
             // 0..100 → tối đa "100" = 3 ký tự). Tổng = 16 ký tự cho mọi giá
             // trị hợp lệ — không bao giờ tràn hay lệch cột.
             snprintf(shadow_[0], 17, "T:%5.1f\x08" "C H:%3d%%", data.temperature, (int)data.humidity); // \x08 là slot 0 (độ)
             snprintf(shadow_[1], 17, "P:%04d hPa", (int)data.pressure);
-            break;
-
-        case ScreenPage::AIR_QUALITY:
-            {
-                const char* aqi_labels[] = {"Tot", "TB", "Kem", "Xau", "R.Xau", "Nguy"};
-                uint8_t cat = (data.aqi_category <= 5) ? data.aqi_category : 5;
-                snprintf(shadow_[0], 17, "AQI: %03d  %s", (int)data.aqi, aqi_labels[cat]);
-                // Dùng % 1000 để cam kết với compiler số này chỉ có tối đa 3 chữ số
-                snprintf(shadow_[1], 17, "PM2.5: %03d \x09g/m3", (unsigned int)data.pm2_5 % 1000); 
-            }
-            break;
-
-        case ScreenPage::PARTICULATE:
-            // Rút gọn PM2.5 thành P2.5 để tổng số ký tự vừa đúng 16 ô của màn hình
-            snprintf(shadow_[0], 17, "PM25:%03d P10:%03d", (unsigned int)data.pm2_5 % 1000, (unsigned int)data.pm10 % 1000);
-            snprintf(shadow_[1], 17, "CO2: %04d ppm", (int)data.co2_ppm);
-            break;
-
-        case ScreenPage::DERIVED:
-            snprintf(shadow_[0], 17, "TVOC: %04.2f ppm", data.tvoc_ppm);
-            // Comfort index logic có thể ánh xạ sang chuỗi tại đây
-            snprintf(shadow_[1], 17, "DI: %.1f", data.comfort_index); 
             break;
     }
 }
@@ -213,10 +236,12 @@ void DisplayManager::commitDirtyCheck() {
 // TIỆN ÍCH
 // ============================================================================
 void DisplayManager::tick() {
+    // [XM-1] Cadence 2-5s (Cfg::LCD_MIN_INTERVAL_MS..LCD_MAX_INTERVAL_MS): DisplayManager
+    // không tự ép nhịp — main.cpp phải gọi update(data) rồi tick() mỗi chu kỳ (xem main.cpp).
     if (current_state_ == DisplayState::NORMAL) {
-        // Luân phiên trang hiển thị
+        // Luân phiên trang hiển thị: MAIN_AQI -> MAIN_THI -> DETAIL -> MAIN_AQI ...
         uint8_t next_page = static_cast<uint8_t>(current_page_) + 1;
-        if (next_page > static_cast<uint8_t>(ScreenPage::DERIVED)) {
+        if (next_page > static_cast<uint8_t>(ScreenPage::DETAIL)) {
             next_page = 0;
         }
         current_page_ = static_cast<ScreenPage>(next_page);

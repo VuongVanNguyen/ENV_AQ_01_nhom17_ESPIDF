@@ -12,18 +12,19 @@
 #include <pcf8574.h>          
 
 // §4. ENUM CẦN KHAI BÁO
+// Mô hình 3 trang theo CLAUDE.md §3: 2/3 số trang ưu tiên 3 chỉ số chính
+// (AQI, THI, CO2 — luôn kèm nhãn định tính), 1/3 còn lại là nhóm phụ T/RH/P,
+// luân phiên (rotate) theo tick().
 enum class ScreenPage : uint8_t {
-    TEMP_HUMI = 0,      // Nhiệt độ + Độ ẩm + Áp suất
-    AIR_QUALITY = 1,    // AQI (số) + nhãn category (Tốt/TB/Kém...)
-    PARTICULATE = 2,    // PM2.5 + PM10 + CO2
-    DERIVED = 3         // TVOC + Comfort Index
+    MAIN_AQI = 0,   // AQI (kèm nhãn) + CO2 (kèm nhãn) — chỉ số chính
+    MAIN_THI = 1,   // THI/Comfort Index (kèm nhãn) + PM2.5/PM10 — chỉ số chính
+    DETAIL = 2      // Nhiệt độ + Độ ẩm + Áp suất — nhóm phụ
 };
 
 enum class DisplayState : uint8_t {
-    BOOTING = 0,        // Đang khởi động, chờ mẫu dữ liệu đầu tiên
-    WARMING_UP = 1,     // Ít nhất 1 cảm biến chưa ready
-    CALIB_ALERT = 2,    // Cảnh báo Drift / Cần hiệu chuẩn (Ưu tiên cao nhất)
-    NORMAL = 3          // Hoạt động bình thường, luân phiên trang
+    WARMING_UP = 0,     // Ít nhất 1 cảm biến chưa ready (bao gồm cả lúc mới khởi động)
+    CALIB_ALERT = 1,    // Cảnh báo Drift / Cần hiệu chuẩn (Ưu tiên cao nhất)
+    NORMAL = 2          // Hoạt động bình thường, luân phiên trang
 };
 
 // §2. API CÔNG KHAI
@@ -61,8 +62,8 @@ private:
     hd44780_t lcd_;     // Descriptor cấu hình chân cho driver hd44780
     
     bool initialized_ = false;
-    ScreenPage current_page_ = ScreenPage::TEMP_HUMI;
-    DisplayState current_state_ = DisplayState::BOOTING;
+    ScreenPage current_page_ = ScreenPage::MAIN_AQI;
+    DisplayState current_state_ = DisplayState::WARMING_UP;
 
     // §6.2 Framebuffer phần mềm (16 ký tự + 1 ký tự null terminator cho mỗi dòng)
     char shadow_[2][17] = {0};         // Buffer chứa nội dung MUỐN hiển thị
@@ -82,6 +83,65 @@ private:
 
     // Các hàm nội bộ phục vụ render và thuật toán Dirty-check
     void evaluateState(const AirData &data);
-    void renderToShadow(const AirData &data); 
+    void renderToShadow(const AirData &data);
     void commitDirtyCheck(); // Chỉ gọi I2C transaction ở những vị trí thay đổi text
 };
+
+// ============================================================================
+// CHECKLIST KIỂM TRA DISPLAYMANAGER (đối chiếu CLAUDE.md §3 / §4 / §5)
+// Đánh dấu [x] khi đã fix & verify. Cập nhật liên tục mỗi lần đụng tới module.
+// ============================================================================
+//
+// --- ĐÃ FIX (đợt refactor hiện tại) ---
+// [x] FIX #1  Bỏ hẳn data.tvoc_ppm (field không tồn tại trong AirData) — CLAUDE.md §1.
+// [x] FIX #2  Tái cấu trúc ScreenPage còn 3 trang: MAIN_AQI (AQI+CO2, kèm nhãn),
+//             MAIN_THI (THI+PM2.5/PM10, kèm nhãn), DETAIL (T/RH/P) — 2/3 số trang
+//             ưu tiên 3 chỉ số chính, 1/3 là nhóm phụ T/RH (CLAUDE.md §3).
+// [x] FIX #3  THI in kèm nhãn định tính (Tot/Am/Nong/Kho/Nguy) ánh xạ từ
+//             config.hpp §14 (COMFORT_DI_OK/WARM/HOT/SEVERE).
+// [x] FIX #4  Bỏ DisplayState::BOOTING (trạng thái chết, không bao giờ được
+//             evaluateState() set) — mặc định current_state_ = WARMING_UP, đúng
+//             với thực tế "chưa có cảm biến nào ready" lúc mới khởi động.
+// [x] FIX #5  Wrap-around rotate cập nhật theo enum mới (mod ScreenPage::DETAIL).
+// [x] FIX #6  CO2 in kèm nhãn định tính (Tot/TB/Xau) ánh xạ từ config.hpp §15
+//             (CO2_GOOD_MAX/CO2_MODERATE_MAX) — xem [XM-5].
+//
+// >>> NGUYÊN TẮC §3: cả 3 chỉ số chính AQI / THI / CO2 đều in kèm nhãn định tính. ĐẠT.
+//
+// --- ĐÃ ĐẠT (xác nhận giữ nguyên khi refactor) ---
+// [x] Dùng driver esp-idf-lib hd44780 + pcf8574, KHÔNG dùng LiquidCrystal_I2C (§4).
+// [x] Dùng chung Cfg::I2C_PORT với SensorManager → mutex per-port i2cdev serialize đúng (§4).
+// [x] Pinout PCF8574→LCD khớp §5 (RS=P0, E=P2, D4–D7=P4–P7, BL=P3; RW=P1 ngầm LOW).
+// [x] Dirty-check (shadow_ vs current_display_) chỉ ghi I2C ô thay đổi → giảm tải bus (§4).
+// [x] Nhãn ASCII không dấu ("Tot/TB/Kem/Xau/R.Xau/Nguy") khớp aqi_category 0..5 & HD44780.
+// [x] Ký tự °/µ qua CGRAM slot 0/1, gọi bằng \x08/\x09 (né \x00 = null terminator).
+// [x] Độ rộng định dạng đã canh để mỗi dòng ≤ 16 ô, không tràn cột.
+//
+// ============================================================================
+// LỖI / PHỤ THUỘC LIÊN-MODULE (cần module khác xử lý — KHÔNG sửa trong DisplayManager)
+// ============================================================================
+//
+// [XM-1] main.cpp — CADENCE 2–5s (CLAUDE.md §3): DisplayManager không tự ép nhịp. Phải
+//        verify main.cpp gọi update()→tick() theo chu kỳ nằm trong
+//        [Cfg::LCD_MIN_INTERVAL_MS=2000, Cfg::LCD_MAX_INTERVAL_MS=5000], và
+//        CONFIG_DISPLAY_UPDATE_INTERVAL_MS (Kconfig) cũng nằm trong dải này.
+//        Thứ tự gọi khuyến nghị mỗi chu kỳ: update(data) rồi tick().
+//        TRẠNG THÁI: chưa triển khai (main.cpp Production mode còn là TODO) — đặc tả
+//        đã được sao chép vào main.cpp, CHƯA hiện thực hoá theo yêu cầu.
+//
+// [XM-2] DataFusion.cpp — phải GHI data.comfort_index (THI) và data.calib_needed.
+//        TRẠNG THÁI: ĐÃ XÁC MINH — DataFusion::computeComfort()/driftSelfCheck() ghi
+//        đúng 2 trường này (DataFusion.cpp). Không cần sửa thêm.
+//
+// [XM-3] SensorManager.cpp — phải set đúng data.sensors_ready (AND 3 cờ *_ready).
+//        TRẠNG THÁI: ĐÃ XÁC MINH — SensorManager.cpp gán sensors_ready = bme680_ready
+//        && pms5003_ready && mq135_ready. Không cần sửa thêm.
+//
+// [XM-4] main.cpp — i2cdev_init() phải do SensorManager::init() gọi TRƯỚC, rồi mới tới
+//        DisplayManager::init() (CLAUDE.md §4).
+//        TRẠNG THÁI: chưa triển khai (main.cpp Production mode còn là TODO) — đặc tả
+//        đã được sao chép vào main.cpp, CHƯA hiện thực hoá theo yêu cầu.
+//
+// [XM-5] config.hpp — ĐÃ BỔ SUNG Cfg::CO2_GOOD_MAX / CO2_MODERATE_MAX (§15) để
+//        DisplayManager ánh xạ CO2 → "Tot/TB/Xau" (FIX #6). ĐÃ XONG.
+// ============================================================================

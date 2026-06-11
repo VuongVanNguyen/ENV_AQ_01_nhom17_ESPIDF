@@ -275,37 +275,4 @@ private:
 //   - KHÔNG xoá/comment ESP_LOG* khi commit (nguồn debug song song JTAG — §6.5).
 //   - Các biến nên theo dõi qua JTAG: data.aqi, data.comfort_index, data.co2_ppm,
 //     baseline NVS, dev%, AlertLevel — phục vụ nghiệm thu sai số ≤ 10% (CLAUDE.md §3).
-//
-// ============================================================
-// 14. KẾT QUẢ RÀ SOÁT (AUDIT) — ĐÃ FIX (2026-06-11)
-//     (checklist chi tiết: main/DataFusion_CHECKLIST.md — tất cả mục ĐÃ XONG)
-// ----------------------------------------------------------------------------
-//   [AQI-CAT] FIXED: computeAqi() nay phân loại category bằng Cfg::AQI_CAT_BP[]
-//     (dải CHỈ SỐ 0–500: 50/100/150/200/300, §3.4) thay vì Cfg::AQI_*_MAX (ngưỡng
-//     nồng độ PM2.5 — vẫn giữ nguyên trong config.hpp cho mục đích khác, không
-//     dùng để phân loại data.aqi nữa).
-//
-//   [COMFORT-CONST] FIXED: computeComfort() đọc Cfg::COMFORT_DI_K1/K2/RH_SCALE
-//     (config.hpp §14) thay vì hardcode 0.55f/14.5f/0.01f. Ngưỡng dải §5.2
-//     (COMFORT_DI_OK/WARM/HOT/SEVERE) cũng đã có trong config.hpp §14 cho
-//     DisplayManager.
-//
-//   [ALERT-STALE] FIXED: process() ở nhánh !data_valid nay reset
-//     last_alert_level_ = AlertLevel::NONE trước khi return.
-//
-//   [ALERT-WARMUP] FIXED: computeAlertLevel() nhánh CRITICAL theo aqi_category
-//     (>= VERY_BAD) nay được gate bằng data.sensors_ready (§8); nhánh trùng lặp
-//     "aqi_category == HAZARDOUS → CRITICAL" đã gộp vào nhánh trên (HAZARDOUS >=
-//     VERY_BAD nên đã được bao quát, tránh vòng kiểm tra ungated thứ hai).
-//
-//   [DRIFT-CELSIUS] FIXED: nhánh nhiệt độ trong driftSelfCheck() đổi sang sai số
-//     tuyệt đối dev_abs = |T - baseline_T| > Cfg::DRIFT_TEMP_ABS_C (= ACCURACY_TEMP_C
-//     = 0.5f, config.hpp §11), bỏ guard != 0.0f cho T; RH/PM2.5/CO2 vẫn dùng dev%.
-//
-//   [PM-FINITE] FIXED: bỏ guard isfinite no-op trên giá trị PM (uint16_t) — PM đã
-//     được kiểm tra range bởi Filters.cpp (Cfg::SANITY_PM_MIN/MAX) trước khi tới
-//     DataFusion.
-//
-//   [SUBIDX-COUNT] FIXED: computeAqiSubindex() dùng std::size(Cfg::AQI_INDEX_BP)
-//     thay vì hardcode kCount=7; trần clamp dùng Cfg::AQI_MAX_INDEX.
-// ============================================================================
+

@@ -101,6 +101,15 @@ extern "C" void app_main() {
     // Production mode (CONFIG_TEST_MODE_NONE)
     // TODO: Khởi tạo và tạo task cho SensorManager, NetworkManager,
     //       DisplayManager, StorageHelper, DataFusion
+    //
+    // ---- ĐẶC TẢ LIÊN QUAN ĐẾN DisplayManager (DisplayManager.hpp, chưa triển khai) ----
+    // [XM-4] Thứ tự khởi tạo (CLAUDE.md §4): SensorManager::init() (gọi i2cdev_init() lần
+    //        đầu) PHẢI chạy TRƯỚC DisplayManager::init() — cả hai dùng chung Cfg::I2C_PORT.
+    // [XM-1] Cadence LCD (CLAUDE.md §3): mỗi chu kỳ của task hiển thị, period nằm trong
+    //        [Cfg::LCD_MIN_INTERVAL_MS=2000, Cfg::LCD_MAX_INTERVAL_MS=5000] và đồng bộ với
+    //        CONFIG_DISPLAY_UPDATE_INTERVAL_MS, phải gọi theo đúng thứ tự:
+    //          DisplayManager::update(data);  // vẽ trang hiện tại
+    //          DisplayManager::tick();        // chuẩn bị trang/blink kế tiếp
     ESP_LOGI(TAG, "=== PRODUCTION MODE ===");
 
 #endif

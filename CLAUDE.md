@@ -43,7 +43,7 @@ project_root/
 ```
 | File/Module | Trách nhiệm chính | ESP-IDF APIs liên quan |
 | :--- | :--- | :--- |
-| `main/SensorManager.cpp` | Driver BME680 (I2C), PMS5003 (UART), MQ-135 (ADC). | `i2c_master_*`, `uart_*`, `adc_oneshot_*` |
+| `main/SensorManager.cpp` | Driver BME680 (I2C), PMS5003 (UART), MQ-135 (ADC). | `bme680` + `i2cdev` (esp-idf-lib), `uart_*`, `adc_oneshot_*` |
 | `main/Filters.cpp` | Lọc nhiễu tín hiệu cảm biến: EMA cho T/P/Gas (BME680), SMA cho RH (BME680). Outlier rejection dùng sanity check theo range vật lý — không dùng delta-based threshold. | — |
 | `main/DataFusion.cpp` | Hợp nhất dữ liệu, tính AQI (VN) và Comfort Index theo công thức/thang đo THI (Temperature-Humidity Index, từ T/RH); Drift Self-Check. Không tính TVOC. | — |
 | `main/DisplayManager.cpp` | Điều khiển LCD 16x2 thông qua IC mở rộng chân PCF8574 (I2C). Hiển thị 3 chỉ số chính AQI, THI (Comfort Index), CO2; thêm T/RH nếu vừa màn hình, nếu không thì luân phiên (rotate) trang hiển thị. | `i2c_master_*` |
@@ -65,9 +65,9 @@ project_root/
 
 - **Non-blocking:** Tuyệt đối không dùng `vTaskDelay()` làm logic timing cho nghiệp vụ chính. Mọi tác vụ định kỳ phải dùng `esp_timer_create()` / `esp_timer_start_periodic()` hoặc FreeRTOS Task kết hợp với `xQueueReceive()` / Event Group để đồng bộ — không blocking toàn bộ task.
 
-- **I2C Shared Bus:** BME680 và PCF8574 dùng chung bus I2C, được khởi tạo một lần duy nhất bằng `i2c_master_bus_create()`. Dùng `i2c_master_bus_add_device()` để đăng ký từng thiết bị riêng. BME680: địa chỉ **0x76** (SDO nối GND). PCF8574: địa chỉ **0x20** (A0/A1/A2 nối GND). Mọi truy cập I2C từ nhiều task phải được bảo vệ bằng `SemaphoreHandle_t` (mutex).
+- **I2C Shared Bus (esp-idf-lib `i2cdev`):** BME680 và PCF8574 dùng chung **một bus I2C duy nhất**, quản lý qua thư viện `i2cdev` của esp-idf-lib. Subsystem được khởi tạo một lần bằng `i2cdev_init()` (idempotent — có guard static, gọi nhiều lần không leak; `SensorManager::init()` gọi trước, `DisplayManager::init()` chạy sau). Mỗi thiết bị đăng ký bằng hàm `*_init_desc()` riêng (`bme680_init_desc()`, `pcf8574_init_desc()`) tạo ra một `i2c_dev_t`. **Tất cả thiết bị phải dùng cùng một I2C port** (`I2C_NUM_0`) để chia sẻ đúng bus. BME680: địa chỉ **0x76** (SDO nối GND). PCF8574: địa chỉ **0x20** (A0/A1/A2 nối GND). Thread-safety giữa nhiều task được `i2cdev` tự bảo đảm bằng **mutex per-port nội bộ** (`i2c_dev_create_mutex` / `I2C_DEV_TAKE_MUTEX`) — không cần tự tạo `SemaphoreHandle_t` thủ công, nhưng **bắt buộc mọi truy cập I2C phải đi qua API i2cdev** (không trộn lẫn driver `i2c_master_*` mới trên cùng port).
 
-- **LCD Control:** Giao tiếp với LCD 16x2 thông qua PCF8574 bằng cách tự implement giao thức 4-bit trực tiếp qua `i2c_master_transmit()` — không dùng thư viện `LiquidCrystal_I2C` (thư viện Arduino). Chỉ cập nhật màn hình khi dữ liệu thay đổi để giảm tải bus I2C.
+- **LCD Control (esp-idf-lib `hd44780` + `pcf8574`):** Giao tiếp với LCD 16x2 qua PCF8574 bằng driver `hd44780` (chế độ 4-bit) của esp-idf-lib, với callback ghi byte xuống `pcf8574_port_write()`. **Tuyệt đối không dùng `LiquidCrystal_I2C`** hay bất kỳ wrapper Arduino nào. Pinout PCF8574→LCD khai báo trong `hd44780_t` phải khớp §5 (RS=P0, E=P2, D4–D7=P4–P7; RW=P1 luôn giữ LOW = write-mode; backlight = P3). Chỉ cập nhật vùng ký tự **thực sự thay đổi** (dirty-check giữa shadow buffer và nội dung đang hiển thị) để giảm tải bus I2C.
 
 - **Data Persistence:** Hiệu chuẩn (Offset/Gain) phải được lưu vào NVS (Non-Volatile Storage) thông qua `nvs_flash_init()` và `nvs_open()` / `nvs_set_*` / `nvs_commit()`. NVS **phải lưu thêm** `last_calib_timestamp` (Unix time, kiểu `int64_t`) để tính chu kỳ 30 ngày.
 
@@ -83,7 +83,7 @@ project_root/
 
 | Bus/Chân | Pins | Thiết bị | Ghi chú |
 | :--- | :--- | :--- | :--- |
-| **I2C SDA** | GPIO21 | BME680, PCF8574 | Bus dùng chung, khởi tạo qua `i2c_master_bus_create()` |
+| **I2C SDA** | GPIO21 | BME680, PCF8574 | Bus dùng chung (`I2C_NUM_0`), quản lý qua `i2cdev` (esp-idf-lib) |
 | **I2C SCL** | GPIO22 | BME680, PCF8574 | Bus dùng chung |
 | **UART** | RX=16, TX=17, SET=4 | PMS5003 | Dùng UART port 1 hoặc 2 (`UART_NUM_1` / `UART_NUM_2`) |
 | **ADC1** | GPIO34 | MQ-135 | Dùng `adc_oneshot_*` API; tránh xung đột với WiFi (dùng ADC1, không dùng ADC2) |
@@ -91,7 +91,7 @@ project_root/
 | **Output** | GPIO25 (LED RED), GPIO26 (LED YELLOW), GPIO27 (LED GREEN), GPIO32 (Buzzer) | Cảnh báo | Cấu hình qua `gpio_config()` với mode `GPIO_MODE_OUTPUT` |
 
 **Kết nối PCF8574 → LCD 16x2:**
-- P0: RS, P1: RW, P2: E
+- P0: RS, P1: RW (giữ LOW = write), P2: E, P3: Backlight (BL)
 - P4–P7: D4–D7 (Chế độ 4-bit)
 - A0, A1, A2 nối GND → Địa chỉ I2C: 0x20
 

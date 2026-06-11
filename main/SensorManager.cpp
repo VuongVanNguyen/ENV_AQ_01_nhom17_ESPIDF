@@ -160,7 +160,6 @@ esp_err_t SensorManager::readAll(AirData &out) {
         out.co2_ppm = co2;
     }
     out.mq135_ready = (up_ms >= Cfg::MQ135_WARMUP_MS) && (co2 > 0.0f);
-    // tvoc_ppm sẽ do DataFusion suy ra từ gas_resistance (chưa tính ở đây)
 
     // ---------- Tổng hợp ----------
     out.sensors_ready = out.bme680_ready && out.pms5003_ready && out.mq135_ready;

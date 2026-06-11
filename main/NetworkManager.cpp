@@ -396,7 +396,6 @@ size_t NetworkManager::buildJson(const AirData &data, char *out, size_t out_sz,
 
     // --- MQ-135 ---
     cJSON_AddNumberToObject(root, "co2",     data.co2_ppm);
-    cJSON_AddNumberToObject(root, "tvoc",    data.tvoc_ppm);
 
     // --- Chỉ số tính toán (DataFusion) ---
     cJSON_AddNumberToObject(root, "aqi",     data.aqi);

@@ -73,14 +73,12 @@ private:
     esp_err_t saveBaseline(int64_t timestamp);
 
     void initializeBaselineFromData(const AirData &data, bool time_synced);
-    void computeTvoc(AirData &data) const;
     void computeAqi(AirData &data);
     void computeComfort(AirData &data) const;
     void driftSelfCheck(AirData &data, bool time_synced);
     void computeAlertLevel(AirData &data);
     float computeAqiSubindex(float concentration, const float *breakpoints) const;
     bool hasFiniteValue(float value) const;
-    float humidityCorrectionFactor(float humidity) const;
 };
 // 3. THUẬT TOÁN — AQI THEO TIÊU CHUẨN VIỆT NAM (QĐ 1459/QĐ-TCMT 2019)
 // ----------------------------------------------------------------------------
@@ -108,54 +106,29 @@ private:
 //   3.5 Biên/clamp: C_x vượt điểm gãy cao nhất → kẹp AQI = 500 (Nguy hại).
 //       C_x âm/không hợp lệ đã bị Filters loại; nếu vẫn gặp → coi như chưa ready.
 //
-//   GHI CHÚ: Các hằng Cfg::AQI_GOOD_MAX/MODERATE_MAX/... hiện có (config.hpp §7)
-//   là ngưỡng PHÂN LOẠI NHANH theo nồng độ PM2.5 — có thể dùng cho đường tắt
-//   category, nhưng AQI số (data.aqi) BẮT BUỘC tính bằng nội suy §3.1 để đạt
-//   sai số lặp ≤ 10% (CLAUDE.md §3 — chỉ tiêu nghiệm thu AQI).
-//
-// ============================================================================
-// 4. THUẬT TOÁN — TVOC (ppm) TỪ ĐIỆN TRỞ GAS BME680
-// ----------------------------------------------------------------------------
-//   ĐẦU VÀO: data.gas_resistance (Ω, ĐÃ qua EMA của Filters), data.humidity;
-//            chỉ tính khi data.bme680_ready (heater ổn định + gas hợp lệ).
-//
-//   4.1 Baseline điện trở khí sạch R0_gas:
-//       - BME680 KHÔNG cho TVOC tuyệt đối — phải quy chiếu về điện trở khí sạch.
-//       - R0_gas = điện trở gas trong môi trường sạch, ước lượng bằng cận-trên
-//         trượt (running max/percentile cao) của gas_resistance khi không khí
-//         tốt. Lưu/đồng bộ cùng cơ chế baseline NVS (Cfg::NVS_KEY_BL_* — có thể
-//         CẦN THÊM key cho gas, xem §10) để sống sót qua reboot.
-//
-//   4.2 Tỉ số khí: ratio = R0_gas / Rs_gas (ratio > 1 ⇒ có VOC, Rs giảm khi VOC↑).
-//
-//   4.3 Quy đổi sang TVOC ppm theo luật mũ/log (giống họ MQ): chọn 1 trong:
-//         tvoc_ppm = A_tvoc · ratio ^ B_tvoc           (power-law), HOẶC
-//         tvoc_ppm = scale · ln(ratio) (+ offset)      (log-linear).
-//       → Hằng A_tvoc/B_tvoc (hoặc scale/offset) KHAI BÁO TRONG config.hpp (§10).
-//
-//   4.4 Bù độ ẩm: độ ẩm cao làm Rs giảm giả → đưa Rs về RH tham chiếu trước khi
-//       lấy ratio (tái dùng tinh thần hệ số bù GeorgK đã có cho MQ-135). Hệ số bù
-//       (nếu khác MQ-135) khai báo ở config.hpp.
-//
-//   4.5 Clamp tvoc_ppm ≥ 0; ghi vào data.tvoc_ppm.
-//       NFR: sai số lặp TVOC ≤ 10% (CLAUDE.md §3) — dùng gas đã EMA + R0 ổn định.
+//   GHI CHÚ: Các hằng Cfg::AQI_GOOD_MAX/MODERATE_MAX/... (config.hpp §7) là
+//   ngưỡng NỒNG ĐỘ PM2.5 (µg/m³) — KHÔNG dùng để suy ra aqi_category (khác đơn
+//   vị với data.aqi). aqi_category PHẢI dùng Cfg::AQI_CAT_BP[] (config.hpp §7,
+//   dải CHỈ SỐ 0–500) như mô tả ở §3.4. AQI số (data.aqi) BẮT BUỘC tính bằng
+//   nội suy §3.1 để đạt sai số lặp ≤ 10% (CLAUDE.md §3 — chỉ tiêu nghiệm thu AQI).
 //
 // ============================================================================
 // 5. THUẬT TOÁN — COMFORT INDEX (từ Nhiệt độ / Độ ẩm)
 // ----------------------------------------------------------------------------
 //   ĐẦU VÀO: data.temperature (°C), data.humidity (%RH); khi data.bme680_ready.
 //
-//   5.1 Khuyến nghị chỉ số bất tiện nhiệt-ẩm Thom (Discomfort Index, °C):
-//         DI = T − 0.55·(1 − 0.01·RH)·(T − 14.5)
+//   5.1 Chỉ số nhiệt-ẩm THI (Temperature-Humidity Index, °C):
+//         THI = T − 0.55·(1 − 0.01·RH)·(T − 14.5)
 //       → ghi vào data.comfort_index (float). (Có thể chuẩn hoá về thang 0–100
 //         nếu Display cần — quyết định ở DisplayManager, KHÔNG ở đây.)
 //
-//   5.2 Diễn giải dải DI (để Display/Alert dùng, hằng ngưỡng ở config.hpp §10):
+//   5.2 Diễn giải dải DI (để Display/Alert dùng, hằng ngưỡng ở config.hpp §14):
 //         DI < 21  : dễ chịu | 21–24 : hơi nóng | 24–27 : nóng khó chịu
 //         27–29 : rất khó chịu | ≥ 29 : nguy cơ stress nhiệt.
 //
-//   5.3 Hệ số 0.55 / 14.5 (và các ngưỡng dải) KHAI BÁO TRONG config.hpp (§10) —
-//       không hardcode (CLAUDE.md §4). NFR: sai số lặp Comfort ≤ 10% (CLAUDE.md §3).
+//   5.3 Hệ số 0.55 / 14.5 / 0.01 (và các ngưỡng dải) KHAI BÁO TRONG config.hpp
+//       (§14) — không hardcode (CLAUDE.md §4). NFR: sai số lặp Comfort ≤ 10%
+//       (CLAUDE.md §3).
 //
 // ============================================================================
 // 6. DRIFT SELF-CHECK + VÒNG ĐỜI BASELINE NVS (CLAUDE.md §3, §4 — BẮT BUỘC)
@@ -220,7 +193,7 @@ private:
 // 9. LIÊN KẾT MODULE — HÀM/DỮ LIỆU DÙNG TỪ FILE NÀO
 // ----------------------------------------------------------------------------
 //   ĐỌC/GHI struct AirData ............ DataStructures.hpp (in-place; trường §11).
-//   Hằng số cấu hình .................. config.hpp (namespace Cfg; bổ sung §10).
+//   Hằng số cấu hình .................. config.hpp (namespace Cfg; §7/§11/§14).
 //   Tiền xử lý đầu vào ................ Filters::process()   — Filters.hpp
 //                                        (DataFusion CHẠY SAU, giả định đã sạch).
 //   Cờ readiness/raw .................. do SensorManager::readAll() set — SensorManager.hpp.
@@ -246,34 +219,32 @@ private:
 //    đi qua cờ AirData + dây nối ở main.cpp.)
 //
 // ============================================================================
-// 10. HẰNG SỐ CẦN BỔ SUNG VÀO config.hpp (namespace Cfg) — KHÔNG hardcode .cpp
+// 10. HẰNG SỐ TRONG config.hpp (namespace Cfg) — KHÔNG hardcode .cpp
 // ----------------------------------------------------------------------------
-//   ĐÃ CÓ (tái dùng): AQI_GOOD_MAX..AQI_VERY_BAD_MAX, ALERT_CO2_PPM, ALERT_PM25_UGM3,
+//   TÁI DÙNG: AQI_GOOD_MAX..AQI_VERY_BAD_MAX (ngưỡng nồng độ PM2.5 — KHÔNG dùng
+//     để phân loại theo data.aqi), ALERT_CO2_PPM, ALERT_PM25_UGM3,
 //     DRIFT_THRESHOLD_PCT, CALIB_INTERVAL_SEC, NVS_KEY_BL_*, NVS_KEY_LAST_CALIB_TS,
-//     ACCURACY_INDEX_PCT, MAX_CYCLE_TIME_MS, ALERT_MAX_LATENCY_MS.
+//     ACCURACY_INDEX_PCT, ACCURACY_TEMP_C, MAX_CYCLE_TIME_MS, ALERT_MAX_LATENCY_MS.
 //
-//   CẦN THÊM (đề xuất, đặt trong các mục tương ứng của config.hpp):
-//     §7 AQI:
-//       - AQI_INDEX_BP[]  = {0,50,100,150,200,300,500}      (điểm gãy chỉ số)
-//       - AQI_PM25_BP[]   = {0,25,50,80,150,250,500}        (nồng độ PM2.5 µg/m³)
-//       - AQI_PM10_BP[]   = {0,50,150,250,350,420,600}      (nồng độ PM10 µg/m³)
-//       - AQI_MAX_INDEX   = 500                              (clamp trần)
-//     §2b/§4 TVOC:
-//       - TVOC_CURVE_A, TVOC_CURVE_B   (hoặc TVOC_LOG_SCALE/OFFSET)
-//       - TVOC_GAS_R0_DEFAULT_OHM      (R0_gas mặc định khi NVS trống)
-//       - NVS_KEY_BL_GAS               (key NVS lưu R0_gas — nếu lưu lâu dài §4.1)
-//       - (tuỳ chọn) hệ số bù RH cho gas nếu khác MQ-135.
-//     §5 Comfort:
-//       - COMFORT_DI_K1 = 0.55f, COMFORT_DI_K2 = 14.5f
-//       - COMFORT_DI_OK / WARM / HOT / SEVERE  (ngưỡng dải §5.2)
-//   (Giá trị curve TVOC và R0 cần HIỆU CHUẨN thực tế — ghi rõ trong comment config.)
+//   §7 AQI: AQI_INDEX_BP[], AQI_PM25_BP[], AQI_PM10_BP[] (điểm gãy nội suy §3.1),
+//     AQI_CAT_BP[] = {50,100,150,200,300} (phân loại category §3.4),
+//     AQI_MAX_INDEX = 500 (clamp trần §3.5).
+//   §11 Drift: DRIFT_TEMP_ABS_C = ACCURACY_TEMP_C (ngưỡng tuyệt đối drift T, §6.1).
+//   §14 Comfort: COMFORT_DI_K1 = 0.55f, COMFORT_DI_K2 = 14.5f, COMFORT_DI_RH_SCALE
+//     = 0.01f, COMFORT_DI_OK/WARM/HOT/SEVERE (ngưỡng dải §5.2).
+//
+//   Baseline.gas_resistance / NVS_KEY_BL_GAS: GIỮ NGUYÊN (không xóa). Hiện
+//     chưa có consumer sau khi bỏ TVOC, nhưng để dành cho gas drift self-check
+//     tương lai (so data.gas_resistance vs baseline, như T/RH/PM2.5/CO2). Vô
+//     hại, không gây lỗi biên dịch. In/publish gas dùng data.gas_resistance
+//     (live, đã có ở NetworkManager), KHÔNG dùng baseline.
 //
 // ============================================================================
 // 11. TRƯỜNG AirData ĐỌC/GHI & QUY TẮC READINESS (DataStructures.hpp)
 // ----------------------------------------------------------------------------
 //   ĐỌC : temperature, humidity, pressure, gas_resistance, pm2_5, pm10, co2_ppm,
 //          bme680_ready, pms5003_ready, mq135_ready, sensors_ready, data_valid, timestamp.
-//   GHI : aqi, aqi_category, comfort_index, tvoc_ppm, calib_needed,
+//   GHI : aqi, aqi_category, comfort_index, calib_needed,
 //          last_calib_timestamp (CHỈ trong confirmRecalibration / init lần đầu).
 //
 //   QUY TẮC: mỗi chỉ số chỉ tính khi cảm biến nguồn đã ready (§1 process). Khi chưa
@@ -302,6 +273,39 @@ private:
 //   - Dùng TAG riêng (ví dụ "DataFusion") với ESP_LOGI/W/E.
 //   - ESP_LOGW khi phát hiện drift hoặc quá hạn calib; ESP_LOGI khi chốt baseline mới.
 //   - KHÔNG xoá/comment ESP_LOG* khi commit (nguồn debug song song JTAG — §6.5).
-//   - Các biến nên theo dõi qua JTAG: data.aqi, data.tvoc_ppm, baseline NVS, dev%,
-//     AlertLevel — phục vụ nghiệm thu sai số ≤ 10% (CLAUDE.md §3).
+//   - Các biến nên theo dõi qua JTAG: data.aqi, data.comfort_index, data.co2_ppm,
+//     baseline NVS, dev%, AlertLevel — phục vụ nghiệm thu sai số ≤ 10% (CLAUDE.md §3).
+//
+// ============================================================
+// 14. KẾT QUẢ RÀ SOÁT (AUDIT) — ĐÃ FIX (2026-06-11)
+//     (checklist chi tiết: main/DataFusion_CHECKLIST.md — tất cả mục ĐÃ XONG)
+// ----------------------------------------------------------------------------
+//   [AQI-CAT] FIXED: computeAqi() nay phân loại category bằng Cfg::AQI_CAT_BP[]
+//     (dải CHỈ SỐ 0–500: 50/100/150/200/300, §3.4) thay vì Cfg::AQI_*_MAX (ngưỡng
+//     nồng độ PM2.5 — vẫn giữ nguyên trong config.hpp cho mục đích khác, không
+//     dùng để phân loại data.aqi nữa).
+//
+//   [COMFORT-CONST] FIXED: computeComfort() đọc Cfg::COMFORT_DI_K1/K2/RH_SCALE
+//     (config.hpp §14) thay vì hardcode 0.55f/14.5f/0.01f. Ngưỡng dải §5.2
+//     (COMFORT_DI_OK/WARM/HOT/SEVERE) cũng đã có trong config.hpp §14 cho
+//     DisplayManager.
+//
+//   [ALERT-STALE] FIXED: process() ở nhánh !data_valid nay reset
+//     last_alert_level_ = AlertLevel::NONE trước khi return.
+//
+//   [ALERT-WARMUP] FIXED: computeAlertLevel() nhánh CRITICAL theo aqi_category
+//     (>= VERY_BAD) nay được gate bằng data.sensors_ready (§8); nhánh trùng lặp
+//     "aqi_category == HAZARDOUS → CRITICAL" đã gộp vào nhánh trên (HAZARDOUS >=
+//     VERY_BAD nên đã được bao quát, tránh vòng kiểm tra ungated thứ hai).
+//
+//   [DRIFT-CELSIUS] FIXED: nhánh nhiệt độ trong driftSelfCheck() đổi sang sai số
+//     tuyệt đối dev_abs = |T - baseline_T| > Cfg::DRIFT_TEMP_ABS_C (= ACCURACY_TEMP_C
+//     = 0.5f, config.hpp §11), bỏ guard != 0.0f cho T; RH/PM2.5/CO2 vẫn dùng dev%.
+//
+//   [PM-FINITE] FIXED: bỏ guard isfinite no-op trên giá trị PM (uint16_t) — PM đã
+//     được kiểm tra range bởi Filters.cpp (Cfg::SANITY_PM_MIN/MAX) trước khi tới
+//     DataFusion.
+//
+//   [SUBIDX-COUNT] FIXED: computeAqiSubindex() dùng std::size(Cfg::AQI_INDEX_BP)
+//     thay vì hardcode kCount=7; trần clamp dùng Cfg::AQI_MAX_INDEX.
 // ============================================================================

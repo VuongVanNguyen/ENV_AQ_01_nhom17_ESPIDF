@@ -3,7 +3,7 @@
 File này cung cấp hướng dẫn cho Claude khi làm việc trong repository của dự án ENV-AQ-01: Trạm Quan Trắc Không Khí Đa Thông Số.
 
 ## 1. Tổng quan dự án (Project Overview)
-Hệ thống quan trắc dựa trên ESP32, thu thập dữ liệu từ BME680, PMS5003, và MQ-135. Tính toán chỉ số AQI (theo tiêu chuẩn Việt Nam), hiển thị lên LCD và truyền dữ liệu qua MQTT.
+Hệ thống quan trắc dựa trên ESP32, thu thập dữ liệu từ BME680, PMS5003, và MQ-135. Tính toán các chỉ số đầu ra: **AQI** (theo tiêu chuẩn Việt Nam), **Comfort Index** (THI — Temperature-Humidity Index, từ nhiệt độ và độ ẩm), **nồng độ CO2**, cùng Nhiệt độ (T), Độ ẩm (RH) và Áp suất (P); hiển thị lên LCD và truyền dữ liệu qua MQTT. Không còn tính chỉ số TVOC.
 - **Framework:** ESP-IDF (Espressif IoT Development Framework), phát triển thông qua **ESP-IDF Extension trên Visual Studio Code**.
 - **Build System:** CMake + Ninja (được quản lý bởi ESP-IDF toolchain).
 - **Ngôn ngữ lập trình:** C++ (chuẩn C++17), sử dụng trực tiếp ESP-IDF APIs — không dùng Arduino HAL hay bất kỳ Arduino wrapper nào. Lý do chọn C++: kiến trúc đa module của dự án (SensorManager, NetworkManager, Filters...) hưởng lợi rõ từ encapsulation (class), RAII, và STL (`std::queue` cho Offline Buffer, `std::array` cho filter window). Overhead RAM/Flash của C++ trên ESP32 (520KB SRAM, 4MB+ Flash) là không đáng kể. Entry point bắt buộc khai báo `extern "C" void app_main()`.
@@ -12,7 +12,7 @@ Hệ thống quan trắc dựa trên ESP32, thu thập dữ liệu từ BME680, 
 ## 2. Kiến trúc & Phân tách Module
 Toàn bộ module chia sẻ struct `AirData` (định nghĩa trong `main/include/DataStructures.hpp`).
 
-**Luồng dữ liệu:** `SensorManager` (Đọc thô) → `Filters` (Lọc nhiễu) → `DataFusion` (Tính AQI/Comfort) → `DisplayManager` (LCD) + `NetworkManager` (MQTT) + `StorageHelper` (SD Card).
+**Luồng dữ liệu:** `SensorManager` (Đọc thô) → `Filters` (Lọc nhiễu) → `DataFusion` (Tính AQI, Comfort Index/THI, CO2) → `DisplayManager` (LCD) + `NetworkManager` (MQTT) + `StorageHelper` (SD Card).
 
 **Cấu trúc thư mục chuẩn ESP-IDF:**
 ```
@@ -45,8 +45,8 @@ project_root/
 | :--- | :--- | :--- |
 | `main/SensorManager.cpp` | Driver BME680 (I2C), PMS5003 (UART), MQ-135 (ADC). | `i2c_master_*`, `uart_*`, `adc_oneshot_*` |
 | `main/Filters.cpp` | Lọc nhiễu tín hiệu cảm biến: EMA cho T/P/Gas (BME680), SMA cho RH (BME680). Outlier rejection dùng sanity check theo range vật lý — không dùng delta-based threshold. | — |
-| `main/DataFusion.cpp` | Hợp nhất dữ liệu, tính AQI (VN) và Comfort Index; Drift Self-Check. | — |
-| `main/DisplayManager.cpp` | Điều khiển LCD 16x2 thông qua IC mở rộng chân PCF8574 (I2C). | `i2c_master_*` |
+| `main/DataFusion.cpp` | Hợp nhất dữ liệu, tính AQI (VN) và Comfort Index theo công thức/thang đo THI (Temperature-Humidity Index, từ T/RH); Drift Self-Check. Không tính TVOC. | — |
+| `main/DisplayManager.cpp` | Điều khiển LCD 16x2 thông qua IC mở rộng chân PCF8574 (I2C). Hiển thị 3 chỉ số chính AQI, THI (Comfort Index), CO2; thêm T/RH nếu vừa màn hình, nếu không thì luân phiên (rotate) trang hiển thị. | `i2c_master_*` |
 | `main/NetworkManager.cpp` | Quản lý WiFi, MQTT (JSON payload), xử lý Buffer khi mất mạng. | `esp_wifi_*`, `esp_mqtt_client_*` |
 | `main/StorageHelper.cpp` | Ghi log dữ liệu vào thẻ SD (định dạng .csv). | `esp_vfs_fat_sdmmc_mount`, `sdmmc_*` |
 | `main/main.cpp` | Khởi tạo hệ thống (`extern "C" void app_main()`), tạo và điều phối bằng FreeRTOS tasks — không dùng `vTaskDelay()` làm logic chính. | `xTaskCreate`, `esp_event_loop_*` |
@@ -57,8 +57,8 @@ project_root/
 - **Năng lượng:** Công suất trung bình <= 2.0W. Sử dụng Modem-sleep (`esp_wifi_set_ps(WIFI_PS_MODEM)`) khi nhàn rỗi.
 - **Thời gian thực:** Tổng chu kỳ đọc + xử lý dữ liệu phải hoàn tất trong <= 300ms.
 - **Độ trễ:** Cảnh báo (Buzzer/LED) và đẩy sự kiện lên Cloud <= 3s.
-- **Hiển thị:** LCD cập nhật thông số mỗi 2-5 giây, đảm bảo không gây trễ bus I2C.
-- **Độ chính xác sau hiệu chuẩn:** Sai số tổng T ≤ ±0.5°C, RH ≤ ±3%RH. Sai số lặp lại của các chỉ số suy diễn (AQI, TVOC, Comfort Index) ≤ 10%. Đây là chỉ tiêu kiểm thử nghiệm thu bắt buộc.
+- **Hiển thị:** LCD 16x2 cập nhật thông số mỗi 2-5 giây, đảm bảo không gây trễ bus I2C. Ưu tiên hiển thị 3 chỉ số chính: **AQI**, **THI** (Comfort Index) và **nồng độ CO2**. Nhiệt độ (T) và Độ ẩm (RH) được hiển thị thêm nếu vừa màn hình; nếu không đủ chỗ thì chuyển sang chế độ hiển thị luân phiên (rotate theo trang) giữa nhóm chỉ số chính và nhóm T/RH.
+- **Độ chính xác sau hiệu chuẩn:** Sai số tổng T ≤ ±0.5°C, RH ≤ ±3%RH. Sai số lặp lại của các chỉ số suy diễn (AQI, Comfort Index/THI, CO2) ≤ 10%. Đây là chỉ tiêu kiểm thử nghiệm thu bắt buộc.
 - **Ổn định dài hạn:** Chu kỳ tự kiểm tra độ trôi tham số hiệu chuẩn tối đa 30 ngày. Khi sai lệch phát hiện > 10% so với baseline, hệ thống phải phát cảnh báo yêu cầu tái hiệu chuẩn — không được âm thầm bù trừ sai số mà không thông báo.
 
 ## 4. Quy tắc lập trình quan trọng (Key Rules)

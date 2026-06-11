@@ -25,7 +25,7 @@
 // ----------------------------------------------------------------------------
 //   SensorManager::readAll()  (đọc thô + set *_ready)
 //        → Filters::process()       (làm sạch in-place)
-//        → DataFusion::process()    (suy diễn AQI/TVOC/Comfort + Drift + calib)
+//        → DataFusion::process()    (suy diễn AQI/Comfort + Drift + calib)
 //        → DisplayManager (LCD)  ←  MODULE NÀY  + NetworkManager + StorageHelper
 //
 //   DisplayManager là tầng "trình bày" CUỐI luồng: nhận AirData ĐÃ LỌC + ĐÃ SUY
@@ -38,7 +38,7 @@
 //     - Hiển thị trạng thái hệ thống: warmup, mất mạng, yêu cầu tái hiệu chuẩn.
 //
 //   RANH GIỚI (KHÔNG làm — tránh chồng lấn module khác):
-//     - KHÔNG đọc cảm biến, KHÔNG tính AQI/TVOC/Comfort (Sensor/Filters/DataFusion).
+//     - KHÔNG đọc cảm biến, KHÔNG tính AQI/Comfort (Sensor/Filters/DataFusion).
 //     - KHÔNG quyết định mức cảnh báo (AlertLevel do DataFusion tính — §8 của
 //       DataFusion.hpp). DisplayManager chỉ ĐỌC kết quả và hiển thị.
 //     - KHÔNG điều khiển LED/Buzzer (đó là main.cpp lái GPIO — CLAUDE.md §5).
@@ -154,7 +154,7 @@
 //       0 = TEMP_HUMI   : Nhiệt độ + Độ ẩm + Áp suất
 //       1 = AIR_QUALITY : AQI (số) + nhãn category (Tốt/TB/Kém/Xấu/Rất xấu/Nguy hại)
 //       2 = PARTICULATE : PM2.5 + PM10 + CO2
-//       3 = DERIVED     : TVOC + Comfort Index (diễn giải dải DI)
+//       3 = DERIVED     : Comfort Index / THI (diễn giải dải DI)
 //     Số trang & thứ tự có thể điều chỉnh; tổng số trang khai báo hằng ở §10.
 //
 //   enum class DisplayState : uint8_t  — trạng thái tổng (§7.1, ưu tiên giảm dần):
@@ -234,7 +234,7 @@
 //         TEMP_HUMI   : "T:25.3{°}C H:60%"        / "P:1013 hPa"     (bme680_ready)
 //         AIR_QUALITY : "AQI:042  Tot"            / "PM2.5:12 ug/m3" (pms5003_ready)
 //         PARTICULATE : "PM2.5:012 PM10:020"      / "CO2: 650 ppm"   (pms/mq135_ready)
-//         DERIVED     : "TVOC:0.42 ppm"           / "Comfort: De chiu"(bme680_ready)
+//         DERIVED     : "THI:25.3 C"              / "Comfort: De chiu"(bme680_ready)
 //       (Bố cục trên là GỢI Ý — phải vừa 16 ký tự/hàng; chốt khi triển khai.)
 //       Nhãn category AQI (Tốt/Trung binh/Kém/Xấu/Rất xấu/Nguy hại) lấy theo
 //       data.aqi_category (0..5) — bảng nhãn (không dấu, ≤ chiều rộng) ở §10.
@@ -259,7 +259,7 @@
 //   - Dùng snprintf vào buffer cố định ≤ 17 byte/hàng (16 ký tự + '\0'); KHÔNG
 //     cấp phát heap trong vòng cập nhật (giảm phân mảnh, giữ non-blocking).
 //   - Số chữ số thập phân hợp lý cho LCD: T/RH 1 chữ số, áp suất số nguyên,
-//     AQI số nguyên (zero-pad 3), PM số nguyên, CO2 số nguyên, TVOC 2 chữ số.
+//     AQI số nguyên (zero-pad 3), PM số nguyên, CO2 số nguyên, THI 1 chữ số thập phân.
 //   - Ký tự không thuộc ASCII (°, µ) → dùng glyph CGRAM (§6.4) hoặc thay an toàn.
 //   - Chuỗi nhãn tiếng Việt KHÔNG DẤU (HD44780 không có font dấu) để hiển thị đúng.
 //
@@ -278,7 +278,7 @@
 //                                       port (§3) — KHÔNG khởi tạo lại bus/i2cdev.
 //   Cờ readiness (warmup) ............ do SensorManager::readAll() set —
 //                                       SensorManager.hpp; tham khảo isFullyReady().
-//   AQI/category/TVOC/Comfort/calib ... do DataFusion::process() ghi —
+//   AQI/category/Comfort/calib ........ do DataFusion::process() ghi —
 //                                       DataFusion.hpp (§3,§4,§5,§6). Display chỉ ĐỌC.
 //   Thông báo mạng/SD (showMessage) .. do main.cpp / task mạng gọi khi
 //                                       NetworkManager::isConnected()==false hoặc
@@ -328,13 +328,13 @@
 // 11. TRƯỜNG AirData ĐỌC & QUY TẮC READINESS (DataStructures.hpp) — CHỈ ĐỌC
 // ----------------------------------------------------------------------------
 //   ĐỌC : temperature, humidity, pressure, gas_resistance(*), pm1_0, pm2_5, pm10,
-//          co2_ppm, tvoc_ppm, aqi, aqi_category, comfort_index,
+//          co2_ppm, aqi, aqi_category, comfort_index,
 //          calib_needed, bme680_ready, pms5003_ready, mq135_ready, sensors_ready,
 //          data_valid, timestamp.
 //   GHI : (KHÔNG GHI — DisplayManager là module read-only trên AirData).
 //
 //   QUY TẮC: với mỗi kênh, CHỈ hiển thị giá trị số khi cờ *_ready tương ứng = true
-//   (bme680_ready cho T/RH/P/TVOC/Comfort; pms5003_ready cho PM/AQI; mq135_ready
+//   (bme680_ready cho T/RH/P/Comfort(THI); pms5003_ready cho PM/AQI; mq135_ready
 //   cho CO2). Khi chưa ready → in "--" thay vì 0/NAN (§7.2). Khi data_valid=false
 //   → KHÔNG vẽ số mới (giữ màn hình cũ hoặc báo lỗi). Đồng nhất triết lý "không
 //   feed giá trị warmup" của Filters/DataFusion/SensorManager.

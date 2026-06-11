@@ -145,7 +145,12 @@ inline constexpr float    AQI_VERY_BAD_MAX = static_cast<float>(CONFIG_AQI_VERY_
 inline constexpr float    AQI_INDEX_BP[]   = {0.0f, 50.0f, 100.0f, 150.0f, 200.0f, 300.0f, 500.0f};
 inline constexpr float    AQI_PM25_BP[]    = {0.0f, 25.0f, 50.0f, 80.0f, 150.0f, 250.0f, 500.0f};
 inline constexpr float    AQI_PM10_BP[]    = {0.0f, 50.0f, 150.0f, 250.0f, 350.0f, 420.0f, 600.0f};
-// > AQI_VERY_BAD_MAX → category 5 (Nguy hại)
+
+// Dải CHỈ SỐ AQI (0–500) dùng để phân loại aqi_category (§3.4) — KHÔNG dùng
+// AQI_*_MAX (các hằng đó là ngưỡng NỒNG ĐỘ PM2.5, khác đơn vị với data.aqi).
+//   ≤50→GOOD, ≤100→MODERATE, ≤150→POOR, ≤200→BAD, ≤300→VERY_BAD, else HAZARDOUS.
+inline constexpr float    AQI_CAT_BP[]     = {50.0f, 100.0f, 150.0f, 200.0f, 300.0f};
+inline constexpr float    AQI_MAX_INDEX    = 500.0f; // Trần clamp AQI (§3.5)
 
 // ============================================================
 // 8. NGƯỠNG CẢNH BÁO BUZZER / LED
@@ -211,7 +216,11 @@ inline constexpr int64_t  CALIB_INTERVAL_SEC   =
 // Độ chính xác sau hiệu chuẩn (dùng trong kiểm thử nghiệm thu)
 inline constexpr float    ACCURACY_TEMP_C      = 0.5f;  // ±°C
 inline constexpr float    ACCURACY_HUMI_RH     = 3.0f;  // ±%RH
-inline constexpr float    ACCURACY_INDEX_PCT   = 10.0f; // AQI/TVOC/Comfort ±%
+inline constexpr float    ACCURACY_INDEX_PCT   = 10.0f; // AQI/Comfort(THI)/CO2 ±% (TVOC đã bỏ)
+
+// Drift nhiệt độ T dùng SAI SỐ TUYỆT ĐỐI (°C) thay vì dev% — dev% trên thang
+// Celsius quá nhạy khi baseline gần 0 (vd 0.5°C lệch ở baseline=5°C = 10%).
+inline constexpr float    DRIFT_TEMP_ABS_C     = ACCURACY_TEMP_C; // = 0.5°C
 
 // ============================================================
 // 12. NVS — KEYS LƯU HIỆU CHUẨN
@@ -238,5 +247,25 @@ inline constexpr uint32_t TASK_PRIO_SENSOR          = 5;
 inline constexpr uint32_t TASK_PRIO_NETWORK         = 4;
 inline constexpr uint32_t TASK_PRIO_DISPLAY         = 3;
 inline constexpr uint32_t TASK_PRIO_STORAGE         = 2;
+
+// ============================================================
+// 14. COMFORT INDEX (THI) — DataFusion / DisplayManager
+// ============================================================
+
+// THI = T - K1*(1 - RH_SCALE*RH)*(T - K2)  (DataFusion.hpp §5.1)
+inline constexpr float    COMFORT_DI_K1       = 0.55f;
+inline constexpr float    COMFORT_DI_K2       = 14.5f;
+inline constexpr float    COMFORT_DI_RH_SCALE = 0.01f;
+
+// Ngưỡng diễn giải dải DI, °C (DataFusion.hpp §5.2):
+//   DI < OK             : de chiu
+//   OK   <= DI < WARM   : hoi nong
+//   WARM <= DI < HOT    : nong kho chiu
+//   HOT  <= DI < SEVERE : rat kho chiu
+//   DI >= SEVERE        : nguy co stress nhiet
+inline constexpr float    COMFORT_DI_OK       = 21.0f;
+inline constexpr float    COMFORT_DI_WARM     = 24.0f;
+inline constexpr float    COMFORT_DI_HOT      = 27.0f;
+inline constexpr float    COMFORT_DI_SEVERE   = 29.0f;
 
 } // namespace Cfg

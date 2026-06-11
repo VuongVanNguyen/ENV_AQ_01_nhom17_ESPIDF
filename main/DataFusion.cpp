@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include <ctime>
+#include <iterator>
 
 static const char *TAG = "DataFusion";
 
@@ -55,18 +56,13 @@ esp_err_t DataFusion::init() {
 void DataFusion::process(AirData &data, bool time_synced) {
     if (!data.data_valid) {
         ESP_LOGW(TAG, "Data invalid, skipping fusion");
+        last_alert_level_ = AlertLevel::NONE;
         setSafeSentinel(data);
         return;
     }
 
     if (!has_baseline_ && data.sensors_ready) {
         initializeBaselineFromData(data, time_synced);
-    }
-
-    if (data.bme680_ready) {
-        computeTvoc(data);
-    } else {
-        data.tvoc_ppm = NAN;
     }
 
     if (data.pms5003_ready) {
@@ -146,7 +142,6 @@ const char *DataFusion::calibReason() const {
 void DataFusion::setSafeSentinel(AirData &data) const {
     data.aqi = NAN;
     data.aqi_category = static_cast<uint8_t>(AqiCategory::GOOD);
-    data.tvoc_ppm = NAN;
     data.comfort_index = NAN;
     data.calib_needed = false;
     data.last_calib_timestamp = last_calib_ts_;
@@ -292,41 +287,7 @@ void DataFusion::initializeBaselineFromData(const AirData &data, bool time_synce
     xSemaphoreGive(mutex_);
 }
 
-void DataFusion::computeTvoc(AirData &data) const {
-    if (!hasFiniteValue(data.gas_resistance) || !hasFiniteValue(data.humidity)) {
-        data.tvoc_ppm = NAN;
-        return;
-    }
-
-    float r0 = has_baseline_ ? baseline_.gas_resistance : Cfg::TVOC_GAS_R0_DEFAULT_OHM;
-    if (!(r0 > 0.0f)) {
-        r0 = Cfg::TVOC_GAS_R0_DEFAULT_OHM;
-    }
-
-    const float humidity_factor = humidityCorrectionFactor(data.humidity);
-    const float corrected_gas = data.gas_resistance * humidity_factor;
-    if (!(corrected_gas > 0.0f)) {
-        data.tvoc_ppm = NAN;
-        return;
-    }
-
-    float ratio = r0 / corrected_gas;
-    if (ratio < 1.0f) {
-        ratio = 1.0f;
-    }
-
-    float tvoc = Cfg::TVOC_CURVE_A * std::powf(ratio, Cfg::TVOC_CURVE_B);
-    data.tvoc_ppm = fmaxf(0.0f, tvoc);
-}
-
 void DataFusion::computeAqi(AirData &data) {
-    if (!hasFiniteValue(data.pm2_5) || !hasFiniteValue(data.pm10)) {
-        data.aqi = NAN;
-        data.aqi_category = static_cast<uint8_t>(AqiCategory::GOOD);
-        last_category_ = AqiCategory::GOOD;
-        return;
-    }
-
     const float aqi_pm25 = computeAqiSubindex(data.pm2_5, Cfg::AQI_PM25_BP);
     const float aqi_pm10 = computeAqiSubindex(data.pm10, Cfg::AQI_PM10_BP);
     data.aqi = fmaxf(aqi_pm25, aqi_pm10);
@@ -337,15 +298,15 @@ void DataFusion::computeAqi(AirData &data) {
         return;
     }
 
-    if (data.aqi <= Cfg::AQI_GOOD_MAX) {
+    if (data.aqi <= Cfg::AQI_CAT_BP[0]) {
         last_category_ = AqiCategory::GOOD;
-    } else if (data.aqi <= Cfg::AQI_MODERATE_MAX) {
+    } else if (data.aqi <= Cfg::AQI_CAT_BP[1]) {
         last_category_ = AqiCategory::MODERATE;
-    } else if (data.aqi <= Cfg::AQI_POOR_MAX) {
+    } else if (data.aqi <= Cfg::AQI_CAT_BP[2]) {
         last_category_ = AqiCategory::POOR;
-    } else if (data.aqi <= Cfg::AQI_BAD_MAX) {
+    } else if (data.aqi <= Cfg::AQI_CAT_BP[3]) {
         last_category_ = AqiCategory::BAD;
-    } else if (data.aqi <= Cfg::AQI_VERY_BAD_MAX) {
+    } else if (data.aqi <= Cfg::AQI_CAT_BP[4]) {
         last_category_ = AqiCategory::VERY_BAD;
     } else {
         last_category_ = AqiCategory::HAZARDOUS;
@@ -362,7 +323,7 @@ void DataFusion::computeComfort(AirData &data) const {
 
     const float t = data.temperature;
     const float rh = data.humidity;
-    data.comfort_index = t - 0.55f * (1.0f - 0.01f * rh) * (t - 14.5f);
+    data.comfort_index = t - Cfg::COMFORT_DI_K1 * (1.0f - Cfg::COMFORT_DI_RH_SCALE * rh) * (t - Cfg::COMFORT_DI_K2);
 }
 
 void DataFusion::driftSelfCheck(AirData &data, bool time_synced) {
@@ -376,9 +337,9 @@ void DataFusion::driftSelfCheck(AirData &data, bool time_synced) {
     bool drift = false;
     const float threshold = Cfg::DRIFT_THRESHOLD_PCT / 100.0f;
 
-    if (data.bme680_ready && hasFiniteValue(data.temperature) && baseline_.temperature != 0.0f) {
-        const float dev = fabsf(data.temperature - baseline_.temperature) / fabsf(baseline_.temperature);
-        if (dev > threshold) {
+    if (data.bme680_ready && hasFiniteValue(data.temperature)) {
+        const float dev_abs = fabsf(data.temperature - baseline_.temperature);
+        if (dev_abs > Cfg::DRIFT_TEMP_ABS_C) {
             drift = true;
             setReason("CALIB_DRIFT_TEMP");
         }
@@ -427,7 +388,7 @@ void DataFusion::computeAlertLevel(AirData &data) {
         return;
     }
 
-    if (data.aqi_category >= static_cast<uint8_t>(AqiCategory::VERY_BAD)) {
+    if (data.sensors_ready && data.aqi_category >= static_cast<uint8_t>(AqiCategory::VERY_BAD)) {
         last_alert_level_ = AlertLevel::CRITICAL;
     }
 
@@ -443,10 +404,6 @@ void DataFusion::computeAlertLevel(AirData &data) {
         }
     }
 
-    if (data.aqi_category == static_cast<uint8_t>(AqiCategory::HAZARDOUS)) {
-        last_alert_level_ = AlertLevel::CRITICAL;
-    }
-
     if (data.calib_needed) {
         if (last_alert_level_ == AlertLevel::NONE) {
             last_alert_level_ = AlertLevel::WARNING;
@@ -459,7 +416,7 @@ float DataFusion::computeAqiSubindex(float concentration, const float *breakpoin
         return NAN;
     }
 
-    constexpr size_t kCount = 7;
+    constexpr size_t kCount = std::size(Cfg::AQI_INDEX_BP);
     if (concentration <= breakpoints[0]) {
         return Cfg::AQI_INDEX_BP[0];
     }
@@ -474,15 +431,9 @@ float DataFusion::computeAqiSubindex(float concentration, const float *breakpoin
         }
     }
 
-    return Cfg::AQI_INDEX_BP[kCount - 1];
+    return Cfg::AQI_MAX_INDEX;
 }
 
 bool DataFusion::hasFiniteValue(float value) const {
     return std::isfinite(value);
-}
-
-float DataFusion::humidityCorrectionFactor(float humidity) const {
-    const float delta = humidity - Cfg::TVOC_RH_REF;
-    const float factor = 1.0f + Cfg::TVOC_RH_COMP_SLOPE * delta;
-    return fmaxf(0.1f, factor);
 }

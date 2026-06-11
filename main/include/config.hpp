@@ -142,26 +142,25 @@ inline constexpr uint32_t PMS5003_WARMUP_MS          = 30'000;   // Fan đạt t
 inline constexpr uint32_t MQ135_WARMUP_MS            = 1'200'000; // MOX preheat theo datasheet (20 phút)
 
 // ============================================================
-// 7. AQI — NGƯỠNG PHÂN LOẠI (PM2.5, µg/m³, tiêu chuẩn VN)
+// 7. AQI — ĐIỂM GÃY NỘI SUY & NGƯỠNG PHÂN LOẠI (tiêu chuẩn VN)
 // ============================================================
-
-// Giá trị đến từ Kconfig để có thể điều chỉnh theo quy định mới
-inline constexpr float    AQI_GOOD_MAX     = static_cast<float>(CONFIG_AQI_GOOD_MAX);
-inline constexpr float    AQI_MODERATE_MAX = static_cast<float>(CONFIG_AQI_MODERATE_MAX);
-inline constexpr float    AQI_POOR_MAX     = static_cast<float>(CONFIG_AQI_POOR_MAX);
-inline constexpr float    AQI_BAD_MAX      = static_cast<float>(CONFIG_AQI_BAD_MAX);
-inline constexpr float    AQI_VERY_BAD_MAX = static_cast<float>(CONFIG_AQI_VERY_BAD_MAX);
 
 // AQI breakpoints theo tiêu chuẩn VN
 inline constexpr float    AQI_INDEX_BP[]   = {0.0f, 50.0f, 100.0f, 150.0f, 200.0f, 300.0f, 500.0f};
 inline constexpr float    AQI_PM25_BP[]    = {0.0f, 25.0f, 50.0f, 80.0f, 150.0f, 250.0f, 500.0f};
 inline constexpr float    AQI_PM10_BP[]    = {0.0f, 50.0f, 150.0f, 250.0f, 350.0f, 420.0f, 600.0f};
-
-// Dải CHỈ SỐ AQI (0–500) dùng để phân loại aqi_category (§3.4) — KHÔNG dùng
-// AQI_*_MAX (các hằng đó là ngưỡng NỒNG ĐỘ PM2.5, khác đơn vị với data.aqi).
-//   ≤50→GOOD, ≤100→MODERATE, ≤150→POOR, ≤200→BAD, ≤300→VERY_BAD, else HAZARDOUS.
-inline constexpr float    AQI_CAT_BP[]     = {50.0f, 100.0f, 150.0f, 200.0f, 300.0f};
 inline constexpr float    AQI_MAX_INDEX    = 500.0f; // Trần clamp AQI (§3.5)
+
+// Dải CHỈ SỐ AQI (0–500) dùng để phân loại aqi_category (§3.4). Giá trị đến
+// từ Kconfig để có thể điều chỉnh theo quy định mới (đơn vị: chỉ số AQI,
+// KHÔNG phải nồng độ PM2.5):
+//   ≤GOOD_MAX→GOOD, ≤MODERATE_MAX→MODERATE, ≤POOR_MAX→POOR,
+//   ≤BAD_MAX→BAD, ≤VERY_BAD_MAX→VERY_BAD, else HAZARDOUS.
+inline constexpr float    AQI_GOOD_MAX     = static_cast<float>(CONFIG_AQI_GOOD_MAX);
+inline constexpr float    AQI_MODERATE_MAX = static_cast<float>(CONFIG_AQI_MODERATE_MAX);
+inline constexpr float    AQI_POOR_MAX     = static_cast<float>(CONFIG_AQI_POOR_MAX);
+inline constexpr float    AQI_BAD_MAX      = static_cast<float>(CONFIG_AQI_BAD_MAX);
+inline constexpr float    AQI_VERY_BAD_MAX = static_cast<float>(CONFIG_AQI_VERY_BAD_MAX);
 
 // ============================================================
 // 8. NGƯỠNG CẢNH BÁO BUZZER / LED

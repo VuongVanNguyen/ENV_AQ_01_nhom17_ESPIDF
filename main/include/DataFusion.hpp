@@ -99,18 +99,20 @@ private:
 //   3.3 AQI tổng = MAX của các sub-index khả dụng (AQI_pm25, AQI_pm10).
 //       → ghi vào data.aqi (float).
 //
-//   3.4 aqi_category suy ra TỪ GIÁ TRỊ data.aqi theo dải chỉ số:
-//         0–50→0, 51–100→1, 101–150→2, 151–200→3, 201–300→4, 301–500→5.
+//   3.4 aqi_category suy ra TỪ GIÁ TRỊ data.aqi theo dải chỉ số AQI (0–500),
+//       so sánh tuần tự với Cfg::AQI_GOOD_MAX/MODERATE_MAX/POOR_MAX/BAD_MAX/
+//       VERY_BAD_MAX (config.hpp §7, đến từ Kconfig, mặc định 50/100/150/200/300):
+//         ≤GOOD_MAX→0, ≤MODERATE_MAX→1, ≤POOR_MAX→2, ≤BAD_MAX→3,
+//         ≤VERY_BAD_MAX→4, else→5.
 //       → ghi vào data.aqi_category (uint8_t, theo enum AqiCategory §2).
 //
 //   3.5 Biên/clamp: C_x vượt điểm gãy cao nhất → kẹp AQI = 500 (Nguy hại).
 //       C_x âm/không hợp lệ đã bị Filters loại; nếu vẫn gặp → coi như chưa ready.
 //
-//   GHI CHÚ: Các hằng Cfg::AQI_GOOD_MAX/MODERATE_MAX/... (config.hpp §7) là
-//   ngưỡng NỒNG ĐỘ PM2.5 (µg/m³) — KHÔNG dùng để suy ra aqi_category (khác đơn
-//   vị với data.aqi). aqi_category PHẢI dùng Cfg::AQI_CAT_BP[] (config.hpp §7,
-//   dải CHỈ SỐ 0–500) như mô tả ở §3.4. AQI số (data.aqi) BẮT BUỘC tính bằng
-//   nội suy §3.1 để đạt sai số lặp ≤ 10% (CLAUDE.md §3 — chỉ tiêu nghiệm thu AQI).
+//   GHI CHÚ: Cfg::AQI_GOOD_MAX/MODERATE_MAX/... (config.hpp §7) là ngưỡng CHỈ SỐ
+//   AQI (0–500, cùng đơn vị với data.aqi) — KHÔNG phải nồng độ PM2.5. AQI số
+//   (data.aqi) BẮT BUỘC tính bằng nội suy §3.1 để đạt sai số lặp ≤ 10%
+//   (CLAUDE.md §3 — chỉ tiêu nghiệm thu AQI).
 //
 // ============================================================================
 // 5. THUẬT TOÁN — COMFORT INDEX (từ Nhiệt độ / Độ ẩm)
@@ -221,13 +223,13 @@ private:
 // ============================================================================
 // 10. HẰNG SỐ TRONG config.hpp (namespace Cfg) — KHÔNG hardcode .cpp
 // ----------------------------------------------------------------------------
-//   TÁI DÙNG: AQI_GOOD_MAX..AQI_VERY_BAD_MAX (ngưỡng nồng độ PM2.5 — KHÔNG dùng
-//     để phân loại theo data.aqi), ALERT_CO2_PPM, ALERT_PM25_UGM3,
-//     DRIFT_THRESHOLD_PCT, CALIB_INTERVAL_SEC, NVS_KEY_BL_*, NVS_KEY_LAST_CALIB_TS,
+//   TÁI DÙNG: ALERT_CO2_PPM, ALERT_PM25_UGM3, DRIFT_THRESHOLD_PCT,
+//     CALIB_INTERVAL_SEC, NVS_KEY_BL_*, NVS_KEY_LAST_CALIB_TS,
 //     ACCURACY_INDEX_PCT, ACCURACY_TEMP_C, MAX_CYCLE_TIME_MS, ALERT_MAX_LATENCY_MS.
 //
 //   §7 AQI: AQI_INDEX_BP[], AQI_PM25_BP[], AQI_PM10_BP[] (điểm gãy nội suy §3.1),
-//     AQI_CAT_BP[] = {50,100,150,200,300} (phân loại category §3.4),
+//     AQI_GOOD_MAX..AQI_VERY_BAD_MAX = 50/100/150/200/300 (ngưỡng CHỈ SỐ AQI,
+//     đến từ Kconfig, dùng phân loại category §3.4),
 //     AQI_MAX_INDEX = 500 (clamp trần §3.5).
 //   §11 Drift: DRIFT_TEMP_ABS_C = ACCURACY_TEMP_C (ngưỡng tuyệt đối drift T, §6.1).
 //   §14 Comfort: COMFORT_DI_K1 = 0.55f, COMFORT_DI_K2 = 14.5f, COMFORT_DI_RH_SCALE

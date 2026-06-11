@@ -298,15 +298,15 @@ void DataFusion::computeAqi(AirData &data) {
         return;
     }
 
-    if (data.aqi <= Cfg::AQI_CAT_BP[0]) {
+    if (data.aqi <= Cfg::AQI_GOOD_MAX) {
         last_category_ = AqiCategory::GOOD;
-    } else if (data.aqi <= Cfg::AQI_CAT_BP[1]) {
+    } else if (data.aqi <= Cfg::AQI_MODERATE_MAX) {
         last_category_ = AqiCategory::MODERATE;
-    } else if (data.aqi <= Cfg::AQI_CAT_BP[2]) {
+    } else if (data.aqi <= Cfg::AQI_POOR_MAX) {
         last_category_ = AqiCategory::POOR;
-    } else if (data.aqi <= Cfg::AQI_CAT_BP[3]) {
+    } else if (data.aqi <= Cfg::AQI_BAD_MAX) {
         last_category_ = AqiCategory::BAD;
-    } else if (data.aqi <= Cfg::AQI_CAT_BP[4]) {
+    } else if (data.aqi <= Cfg::AQI_VERY_BAD_MAX) {
         last_category_ = AqiCategory::VERY_BAD;
     } else {
         last_category_ = AqiCategory::HAZARDOUS;

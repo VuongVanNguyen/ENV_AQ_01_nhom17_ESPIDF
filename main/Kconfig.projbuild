@@ -41,30 +41,30 @@ menu "ENV-AQ-01 Project Configuration"
                 Payload JSON hỗ trợ: {"cmd":"confirm_calib"}, {"cmd":"reboot"}.
     endmenu
 
-    menu "AQI Thresholds (µg/m³ PM2.5)"
+    menu "AQI Category Thresholds (chi so AQI 0-500)"
         config AQI_GOOD_MAX
-            int "PM2.5 max for AQI Good (µg/m³)"
-            default 12
+            int "AQI index max for category Good"
+            default 50
             range 0 500
 
         config AQI_MODERATE_MAX
-            int "PM2.5 max for AQI Moderate"
-            default 35
+            int "AQI index max for category Moderate"
+            default 100
             range 0 500
 
         config AQI_POOR_MAX
-            int "PM2.5 max for AQI Poor"
-            default 55
-            range 0 500
-
-        config AQI_BAD_MAX
-            int "PM2.5 max for AQI Bad"
+            int "AQI index max for category Poor"
             default 150
             range 0 500
 
+        config AQI_BAD_MAX
+            int "AQI index max for category Bad"
+            default 200
+            range 0 500
+
         config AQI_VERY_BAD_MAX
-            int "PM2.5 max for AQI Very Bad"
-            default 250
+            int "AQI index max for category Very Bad"
+            default 300
             range 0 500
     endmenu
 

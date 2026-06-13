@@ -70,16 +70,19 @@ menu "ENV-AQ-01 Project Configuration"
 
     menu "Alert Thresholds"
         config ALERT_CO2_PPM
-            int "CO2 alert threshold (ppm)"
+            int "CO2 WARNING threshold (ppm)"
             default 1000
             range 400 5000
             help
-                Ngưỡng CO2 để phát cảnh báo buzzer/LED.
+                Ngưỡng CO2 để phát cảnh báo mức WARNING (buzzer/LED).
 
-        config ALERT_PM25_UGM3
-            int "PM2.5 alert threshold (µg/m³)"
-            default 55
-            range 0 500
+        config ALERT_CO2_CRITICAL_PPM
+            int "CO2 CRITICAL threshold (ppm)"
+            default 2000
+            range 1000 5000
+            help
+                Ngưỡng CO2 để phát cảnh báo mức CRITICAL (buzzer/LED).
+                Phải >= ALERT_CO2_PPM.
     endmenu
 
     menu "NTP"

@@ -133,7 +133,8 @@ void DisplayManager::evaluateState(const AirData &data) {
 
     if (data.calib_needed) {
         current_state_ = DisplayState::CALIB_ALERT;
-    } else if (!data.sensors_ready) {
+    } else if (!data.bme680_ready && !data.pms5003_ready && !data.mq135_ready) {
+        // Chưa cảm biến nào ready (mới boot) — chưa có gì để hiển thị.
         current_state_ = DisplayState::WARMING_UP;
     } else {
         current_state_ = DisplayState::NORMAL;
@@ -156,54 +157,65 @@ void DisplayManager::renderToShadow(const AirData &data) {
     switch (current_page_) {
         case ScreenPage::MAIN_AQI:
             {
-                const char* aqi_labels[] = {"Tot", "TB", "Kem", "Xau", "R.Xau", "Nguy"};
-                uint8_t aqi_cat = (data.aqi_category <= 5) ? data.aqi_category : 5;
-                snprintf(shadow_[0], 17, "AQI:%03d %s", (int)data.aqi, aqi_labels[aqi_cat]);
-
-                // Phân loại CO2 theo Cfg::CO2_GOOD_MAX/CO2_MODERATE_MAX (config.hpp §15)
-                const char* co2_labels[] = {"Tot", "TB", "Xau"};
-                uint8_t co2_cat;
-                if (data.co2_ppm <= Cfg::CO2_GOOD_MAX) {
-                    co2_cat = 0;
-                } else if (data.co2_ppm <= Cfg::CO2_MODERATE_MAX) {
-                    co2_cat = 1;
+                if (data.pms5003_ready) {
+                    const char* aqi_labels[] = {"Tot", "TB", "Kem", "Xau", "R.Xau", "Nguy"};
+                    uint8_t aqi_cat = (data.aqi_category <= 5) ? data.aqi_category : 5;
+                    snprintf(shadow_[0], 17, "AQI:%03d %s", (int)data.aqi, aqi_labels[aqi_cat]);
                 } else {
-                    co2_cat = 2;
+                    snprintf(shadow_[0], 17, "AQI: WARMING UP");
                 }
-                snprintf(shadow_[1], 17, "CO2:%04d ppm %s", (int)data.co2_ppm, co2_labels[co2_cat]);
+
+                if (data.mq135_ready) {
+                    // Phân loại CO2 theo Cfg::CO2_GOOD_MAX/CO2_MODERATE_MAX (config.hpp §15)
+                    const char* co2_labels[] = {"Tot", "TB", "Xau"};
+                    uint8_t co2_cat;
+                    if (data.co2_ppm <= Cfg::CO2_GOOD_MAX) {
+                        co2_cat = 0;
+                    } else if (data.co2_ppm <= Cfg::CO2_MODERATE_MAX) {
+                        co2_cat = 1;
+                    } else {
+                        co2_cat = 2;
+                    }
+                    snprintf(shadow_[1], 17, "CO2:%04d ppm %s", (int)data.co2_ppm, co2_labels[co2_cat]);
+                } else {
+                    snprintf(shadow_[1], 17, "CO2: WARMING UP");
+                }
             }
             break;
 
         case ScreenPage::MAIN_THI:
             {
-                // Phân loại THI theo Cfg::COMFORT_DI_OK/WARM/HOT/SEVERE (config.hpp §14)
-                const char* thi_labels[] = {"Tot", "Am", "Nong", "Kho", "Nguy"};
-                uint8_t thi_cat;
-                if (data.comfort_index < Cfg::COMFORT_DI_OK) {
-                    thi_cat = 0;
-                } else if (data.comfort_index < Cfg::COMFORT_DI_WARM) {
-                    thi_cat = 1;
-                } else if (data.comfort_index < Cfg::COMFORT_DI_HOT) {
-                    thi_cat = 2;
-                } else if (data.comfort_index < Cfg::COMFORT_DI_SEVERE) {
-                    thi_cat = 3;
+                if (data.bme680_ready) {
+                    // Nhãn THI: data.comfort_category đã được DataFusion phân loại
+                    // theo thang Thom DI 6 mức (config.hpp §14) — Display chỉ map số→nhãn.
+                    const char* thi_labels[] = {"Tot", "Am", "Nong", "Kho", "Nguy", "C.Cuu"};
+                    uint8_t thi_cat = (data.comfort_category <= 5) ? data.comfort_category : 5;
+                    snprintf(shadow_[0], 17, "THI:%4.1f %s", data.comfort_index, thi_labels[thi_cat]);
                 } else {
-                    thi_cat = 4;
+                    snprintf(shadow_[0], 17, "THI: WARMING UP");
                 }
-                snprintf(shadow_[0], 17, "THI:%4.1f %s", data.comfort_index, thi_labels[thi_cat]);
 
-                // Dùng % 1000 để cam kết với compiler số này chỉ có tối đa 3 chữ số
-                snprintf(shadow_[1], 17, "PM25:%03d P10:%03d", (unsigned int)data.pm2_5 % 1000, (unsigned int)data.pm10 % 1000);
+                if (data.pms5003_ready) {
+                    // Dùng % 1000 để cam kết với compiler số này chỉ có tối đa 3 chữ số
+                    snprintf(shadow_[1], 17, "PM25:%03d P10:%03d", (unsigned int)data.pm2_5 % 1000, (unsigned int)data.pm10 % 1000);
+                } else {
+                    snprintf(shadow_[1], 17, "PM: WARMING UP");
+                }
             }
             break;
 
         case ScreenPage::DETAIL:
-            // Độ rộng cố định: %5.1f cho temperature (dải sanity -40.0..85.0
-            // → tối đa "-40.0" = 5 ký tự) và %3d cho humidity (dải sanity
-            // 0..100 → tối đa "100" = 3 ký tự). Tổng = 16 ký tự cho mọi giá
-            // trị hợp lệ — không bao giờ tràn hay lệch cột.
-            snprintf(shadow_[0], 17, "T:%5.1f\x08" "C H:%3d%%", data.temperature, (int)data.humidity); // \x08 là slot 0 (độ)
-            snprintf(shadow_[1], 17, "P:%04d hPa", (int)data.pressure);
+            if (data.bme680_ready) {
+                // Độ rộng cố định: %5.1f cho temperature (dải sanity -40.0..85.0
+                // → tối đa "-40.0" = 5 ký tự) và %3d cho humidity (dải sanity
+                // 0..100 → tối đa "100" = 3 ký tự). Tổng = 16 ký tự cho mọi giá
+                // trị hợp lệ — không bao giờ tràn hay lệch cột.
+                snprintf(shadow_[0], 17, "T:%5.1f\x08" "C H:%3d%%", data.temperature, (int)data.humidity); // \x08 là slot 0 (độ)
+                snprintf(shadow_[1], 17, "P:%04d hPa", (int)data.pressure);
+            } else {
+                snprintf(shadow_[0], 17, "T/RH: WARMING UP");
+                snprintf(shadow_[1], 17, "P: WARMING UP");
+            }
             break;
     }
 }

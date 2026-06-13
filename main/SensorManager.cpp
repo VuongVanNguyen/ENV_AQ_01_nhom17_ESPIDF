@@ -118,27 +118,29 @@ esp_err_t SensorManager::readAll(AirData &out) {
     float t = 0, rh = 0, p = 0, gas = 0;
     bool  heater_ok = false;
     esp_err_t err = bme680ReadOnce(t, rh, p, gas, heater_ok);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Đọc BME680 thất bại: %s", esp_err_to_name(err));
-        return err;                               // lỗi cứng → bỏ chu kỳ
-    }
-    out.temperature    = t;
-    out.humidity       = rh;
-    out.pressure       = p;
-    out.gas_resistance = gas;
-    // BME680 ready khi: đã qua warmup + heater stable + gas hợp lệ (>0)
-    out.bme680_ready = (up_ms >= Cfg::BME680_WARMUP_MS)
-                       && heater_ok
-                       && (gas > 0.0f);
+    const bool bme_ok = (err == ESP_OK);
+    if (bme_ok) {
+        out.temperature    = t;
+        out.humidity       = rh;
+        out.pressure       = p;
+        out.gas_resistance = gas;
+        // BME680 ready khi: đã qua warmup + heater stable + gas hợp lệ (>0)
+        out.bme680_ready = (up_ms >= Cfg::BME680_WARMUP_MS)
+                           && heater_ok
+                           && (gas > 0.0f);
 
-    // Cập nhật ambient temperature cho lần đo gas tiếp theo — cải thiện
-    // độ chính xác của res_heat (thư viện dùng giá trị này tính heat profile).
-    bme680_set_ambient_temperature(&bme680_dev_, static_cast<int16_t>(t));
+        // Cập nhật ambient temperature cho lần đo gas tiếp theo — cải thiện
+        // độ chính xác của res_heat (thư viện dùng giá trị này tính heat profile).
+        bme680_set_ambient_temperature(&bme680_dev_, static_cast<int16_t>(t));
+    } else {
+        ESP_LOGW(TAG, "Đọc BME680 thất bại (%s) — giữ giá trị 0", esp_err_to_name(err));
+    }
 
     // ---------- PMS5003 ----------
     uint16_t pm1 = 0, pm25 = 0, pm10 = 0;
     err = pmsReadFrame(pm1, pm25, pm10);
-    if (err == ESP_OK) {
+    const bool pms_ok = (err == ESP_OK);
+    if (pms_ok) {
         out.pm1_0 = pm1; out.pm2_5 = pm25; out.pm10 = pm10;
         // Frame checksum OK → tăng streak (cap để tránh tràn). Lưu ý: KHÔNG
         // reset khi PM=0 — trong môi trường thực sự sạch, PM có thể =0 hợp lệ.
@@ -156,13 +158,14 @@ esp_err_t SensorManager::readAll(AirData &out) {
     // t và rh đã được đọc từ BME680 phía trên — dùng để chuẩn hóa Rs về 20°C/65%RH.
     float co2 = 0;
     err = mq135ReadPpm(co2, t, rh);
-    if (err == ESP_OK) {
+    const bool mq_ok = (err == ESP_OK);
+    if (mq_ok) {
         out.co2_ppm = co2;
+    } else {
+        ESP_LOGW(TAG, "Đọc MQ-135 thất bại (%s) — giữ giá trị 0", 
+                 esp_err_to_name(err));
     }
     out.mq135_ready = (up_ms >= Cfg::MQ135_WARMUP_MS) && (co2 > 0.0f);
-
-    // ---------- Tổng hợp ----------
-    out.sensors_ready = out.bme680_ready && out.pms5003_ready && out.mq135_ready;
 
     // Dùng Unix time nếu SNTP đã sync (heuristic: time(NULL) > 1577836800 = 1/1/2020).
     // Trước khi SNTP sẵn sàng, fallback về seconds-from-boot — monotonic nhưng không lịch,
@@ -171,7 +174,12 @@ esp_err_t SensorManager::readAll(AirData &out) {
     time_t now = time(NULL);
     out.timestamp = (now > 1577836800LL) ? static_cast<int64_t>(now)
                                          : (esp_timer_get_time() / 1000000LL);
-    out.data_valid = true;
+    // data_valid = true nếu ít nhất 1 cảm biến đọc thành công trong chu kỳ này.
+    out.data_valid = bme_ok || pms_ok || mq_ok;
+    if (!out.data_valid) {
+        ESP_LOGE(TAG, "Cả 3 cảm biến đều đọc thất bại trong chu kỳ này");
+        return ESP_FAIL;
+    }
     return ESP_OK;
 }
 

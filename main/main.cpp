@@ -49,15 +49,14 @@ static void test_all_task(void *) {
             ESP_LOGI("TEST_ALL",
                      "T=%5.2f°C  RH=%5.2f%%  P=%7.2fhPa  Gas=%8.0fΩ | "
                      "PM1=%3u  PM2.5=%3u  PM10=%3u | CO2=%7.1fppm | "
-                     "bme=%s  pms=%s  mq=%s  all=%s",
+                     "bme=%s  pms=%s  mq=%s",
                      data.temperature, data.humidity,
                      data.pressure,    data.gas_resistance,
                      data.pm1_0, data.pm2_5, data.pm10,
                      data.co2_ppm,
                      data.bme680_ready  ? "RDY" : "WARM",
                      data.pms5003_ready ? "RDY" : "WARM",
-                     data.mq135_ready   ? "RDY" : "WARM",
-                     data.sensors_ready ? "READY" : "WARMING");
+                     data.mq135_ready   ? "RDY" : "WARM");
         }
         vTaskDelay(pdMS_TO_TICKS(2000));
     }
@@ -110,6 +109,31 @@ extern "C" void app_main() {
     //        CONFIG_DISPLAY_UPDATE_INTERVAL_MS, phải gọi theo đúng thứ tự:
     //          DisplayManager::update(data);  // vẽ trang hiện tại
     //          DisplayManager::tick();        // chuẩn bị trang/blink kế tiếp
+    //
+    // ---- ĐẶC TẢ LIÊN QUAN ĐẾN DataFusion (DataFusion.hpp §7, §9) ----
+    // [XM-5] time_synced: DataFusion KHÔNG tự gọi NetworkManager::isTimeSynced()
+    //        (tránh circular dependency — xem DataFusion.hpp §9). main.cpp PHẢI
+    //        lấy bool synced = network.isTimeSynced() mỗi chu kỳ và truyền vào:
+    //          dataFusion.process(data, synced);
+    //          dataFusion.confirmRecalibration(data, synced);  // trong cmd_callback "confirm_calib"
+    //
+    // ---- ĐẶC TẢ DÂY NỐI cmd_callback "confirm_calib" (NetworkManager.hpp, DataFusion.hpp §6.4) ----
+    // [XM-6] Thứ tự gọi: network.setCommandCallback(lambda) PHẢI được gọi TRƯỚC
+    //        network.init() (xem comment NetworkManager.hpp — "Gọi trước init()").
+    //        Lambda capture &dataFusion, &shared_data (AirData) và &network.
+    // [XM-7] Đồng bộ AirData dùng chung: lambda chạy trong context MQTT event task
+    //        (có thể khác core với task xử lý dữ liệu chính ghi liên tục vào
+    //        shared_data). DataFusion::mutex_ (nội bộ) CHỈ bảo vệ baseline_/NVS,
+    //        KHÔNG bảo vệ struct AirData truyền vào confirmRecalibration(). main.cpp
+    //        PHẢI tự tạo SemaphoreHandle_t/mutex riêng (hoặc queue) bọc quanh
+    //        shared_data, và lambda PHẢI lock mutex đó trước khi đọc/ghi
+    //        data.temperature/humidity/pm2_5/.../sensors_ready, data_valid, calib_needed.
+    // [XM-8] Nội dung lambda khi nhận cmd == "confirm_calib":
+    //          lock(shared_data_mutex);
+    //          bool synced = network.isTimeSynced();             // §XM-5
+    //          esp_err_t err = dataFusion.confirmRecalibration(shared_data, synced);
+    //          unlock(shared_data_mutex);
+    //          if (err != ESP_OK) ESP_LOGW(...);                 // không retry tự động
     ESP_LOGI(TAG, "=== PRODUCTION MODE ===");
 
 #endif

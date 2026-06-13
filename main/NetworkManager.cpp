@@ -398,15 +398,15 @@ size_t NetworkManager::buildJson(const AirData &data, char *out, size_t out_sz,
     cJSON_AddNumberToObject(root, "co2",     data.co2_ppm);
 
     // --- Chỉ số tính toán (DataFusion) ---
-    cJSON_AddNumberToObject(root, "aqi",     data.aqi);
-    cJSON_AddNumberToObject(root, "aqi_cat", data.aqi_category);
-    cJSON_AddNumberToObject(root, "comfort", data.comfort_index);
+    cJSON_AddNumberToObject(root, "aqi",         data.aqi);
+    cJSON_AddNumberToObject(root, "aqi_cat",     data.pms5003_ready ? (double)data.aqi_category : -1.0);
+    cJSON_AddNumberToObject(root, "comfort",     data.comfort_index);
+    cJSON_AddNumberToObject(root, "comfort_cat", data.bme680_ready ? (double)data.comfort_category : -1.0);
 
     // --- Trạng thái sẵn sàng cảm biến ---
     cJSON_AddBoolToObject(root, "bme680_ok",  data.bme680_ready);
     cJSON_AddBoolToObject(root, "pms_ok",     data.pms5003_ready);
     cJSON_AddBoolToObject(root, "mq135_ok",   data.mq135_ready);
-    cJSON_AddBoolToObject(root, "sensors_ok", data.sensors_ready);
 
     // --- Hiệu chuẩn (Drift Self-Check) ---
     cJSON_AddBoolToObject  (root, "calib_alert", data.calib_needed);

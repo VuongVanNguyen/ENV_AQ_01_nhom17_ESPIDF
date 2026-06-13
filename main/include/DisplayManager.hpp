@@ -22,9 +22,9 @@ enum class ScreenPage : uint8_t {
 };
 
 enum class DisplayState : uint8_t {
-    WARMING_UP = 0,     // Ít nhất 1 cảm biến chưa ready (bao gồm cả lúc mới khởi động)
+    WARMING_UP = 0,     // Chưa CẢM BIẾN NÀO ready (lúc mới khởi động)
     CALIB_ALERT = 1,    // Cảnh báo Drift / Cần hiệu chuẩn (Ưu tiên cao nhất)
-    NORMAL = 2          // Hoạt động bình thường, luân phiên trang
+    NORMAL = 2          // ≥1 cảm biến ready — luân phiên trang, dòng chưa ready in placeholder riêng
 };
 
 // §2. API CÔNG KHAI
@@ -97,8 +97,9 @@ private:
 // [x] FIX #2  Tái cấu trúc ScreenPage còn 3 trang: MAIN_AQI (AQI+CO2, kèm nhãn),
 //             MAIN_THI (THI+PM2.5/PM10, kèm nhãn), DETAIL (T/RH/P) — 2/3 số trang
 //             ưu tiên 3 chỉ số chính, 1/3 là nhóm phụ T/RH (CLAUDE.md §3).
-// [x] FIX #3  THI in kèm nhãn định tính (Tot/Am/Nong/Kho/Nguy) ánh xạ từ
-//             config.hpp §14 (COMFORT_DI_OK/WARM/HOT/SEVERE).
+// [x] FIX #3  THI in kèm nhãn định tính (Tot/Am/Nong/Kho/Nguy/C.Cuu) ánh xạ
+//             trực tiếp từ data.comfort_category (6 mức, đã phân loại sẵn
+//             trong DataFusion::computeComfort() theo thang Thom DI — config.hpp §14).
 // [x] FIX #4  Bỏ DisplayState::BOOTING (trạng thái chết, không bao giờ được
 //             evaluateState() set) — mặc định current_state_ = WARMING_UP, đúng
 //             với thực tế "chưa có cảm biến nào ready" lúc mới khởi động.
@@ -129,13 +130,19 @@ private:
 //        TRẠNG THÁI: chưa triển khai (main.cpp Production mode còn là TODO) — đặc tả
 //        đã được sao chép vào main.cpp, CHƯA hiện thực hoá theo yêu cầu.
 //
-// [XM-2] DataFusion.cpp — phải GHI data.comfort_index (THI) và data.calib_needed.
+// [XM-2] DataFusion.cpp — phải GHI data.comfort_index (THI), data.comfort_category
+//        và data.calib_needed.
 //        TRẠNG THÁI: ĐÃ XÁC MINH — DataFusion::computeComfort()/driftSelfCheck() ghi
-//        đúng 2 trường này (DataFusion.cpp). Không cần sửa thêm.
+//        đúng 3 trường này (DataFusion.cpp). Không cần sửa thêm.
 //
-// [XM-3] SensorManager.cpp — phải set đúng data.sensors_ready (AND 3 cờ *_ready).
-//        TRẠNG THÁI: ĐÃ XÁC MINH — SensorManager.cpp gán sensors_ready = bme680_ready
-//        && pms5003_ready && mq135_ready. Không cần sửa thêm.
+// [XM-3] SensorManager.cpp — phải set đúng 3 cờ độc lập data.bme680_ready/
+//        pms5003_ready/mq135_ready (KHÔNG có field tổng hợp sensors_ready —
+//        đã bị xoá khỏi AirData).
+//        TRẠNG THÁI: ĐÃ XÁC MINH — evaluateState() dùng OR của 3 cờ này để
+//        quyết định WARMING_UP; renderToShadow() tự kiểm tra từng cờ để in
+//        placeholder "... WARMING UP" cho dòng tương ứng khi cảm biến nguồn
+//        chưa ready (tránh (int)NAN khi data.aqi/comfort_index = NAN). Không
+//        cần sửa thêm.
 //
 // [XM-4] main.cpp — i2cdev_init() phải do SensorManager::init() gọi TRƯỚC, rồi mới tới
 //        DisplayManager::init() (CLAUDE.md §4).

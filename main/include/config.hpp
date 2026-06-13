@@ -163,14 +163,48 @@ inline constexpr float    AQI_BAD_MAX      = static_cast<float>(CONFIG_AQI_BAD_M
 inline constexpr float    AQI_VERY_BAD_MAX = static_cast<float>(CONFIG_AQI_VERY_BAD_MAX);
 
 // ============================================================
-// 8. NGƯỠNG CẢNH BÁO BUZZER / LED
+// 8. COMFORT INDEX (THI) — DataFusion / DisplayManager
 // ============================================================
 
-inline constexpr float    ALERT_CO2_PPM   = static_cast<float>(CONFIG_ALERT_CO2_PPM);
-inline constexpr float    ALERT_PM25_UGM3 = static_cast<float>(CONFIG_ALERT_PM25_UGM3);
+// THI = T - K1*(1 - RH_SCALE*RH)*(T - K2)  (DataFusion.hpp §5.1)
+inline constexpr float    COMFORT_DI_K1       = 0.55f;
+inline constexpr float    COMFORT_DI_K2       = 14.5f;
+inline constexpr float    COMFORT_DI_RH_SCALE = 0.01f;
+
+// Ngưỡng phân loại comfort_category (DataFusion.hpp §5.2), theo thang Thom
+// Discomfort Index (DI) ngoài đời thực — 6 mức, đối xứng AqiCategory (§7):
+//   DI < OK               : 0 COMFORTABLE  (de chiu)
+//   OK     <= DI < WARM   : 1 SLIGHTLY_HOT  (hoi nong)
+//   WARM   <= DI < HOT    : 2 HOT           (nong kho chiu)
+//   HOT    <= DI < SEVERE : 3 VERY_HOT      (rat kho chiu)
+//   SEVERE <= DI < DANGER : 4 HEAT_STRESS   (nguy co stress nhiet)
+//   DI >= DANGER          : 5 DANGER        (cap cuu y te / nguy hiem tinh mang)
+inline constexpr float    COMFORT_DI_OK       = 21.0f;
+inline constexpr float    COMFORT_DI_WARM     = 24.0f;
+inline constexpr float    COMFORT_DI_HOT      = 27.0f;
+inline constexpr float    COMFORT_DI_SEVERE   = 29.0f;
+inline constexpr float    COMFORT_DI_DANGER   = 32.0f;
 
 // ============================================================
-// 9. MẠNG — WiFi & MQTT
+// 9. CO2 — DẢI PHÂN LOẠI ĐỊNH TÍNH (DisplayManager)
+// ============================================================
+// Tham chiếu ASHRAE: <1000ppm thông gió tốt, 1000-2000ppm gây buồn ngủ/giảm
+// tập trung, >2000ppm kém. Dùng để ánh xạ data.co2_ppm -> nhãn "Tot/TB/Xau".
+//   CO2 <= CO2_GOOD_MAX            : Tot
+//   CO2_GOOD_MAX < CO2 <= MODERATE : TB
+//   CO2 > CO2_MODERATE_MAX         : Xau
+inline constexpr float    CO2_GOOD_MAX     = 1000.0f; // ppm
+inline constexpr float    CO2_MODERATE_MAX = 2000.0f; // ppm
+
+// ============================================================
+// 10. NGƯỠNG CẢNH BÁO BUZZER / LED
+// ============================================================
+
+inline constexpr float    ALERT_CO2_PPM          = static_cast<float>(CONFIG_ALERT_CO2_PPM);
+inline constexpr float    ALERT_CO2_CRITICAL_PPM = static_cast<float>(CONFIG_ALERT_CO2_CRITICAL_PPM);
+
+// ============================================================
+// 11. MẠNG — WiFi & MQTT
 // ============================================================
 
 inline constexpr const char *WIFI_SSID         = CONFIG_WIFI_SSID;
@@ -183,7 +217,7 @@ inline constexpr const char *NTP_SERVER_URL    = CONFIG_NTP_SERVER_URL;  // SNTP
 inline constexpr int         MQTT_JSON_BUF_LEN = 512;   // Byte — đủ cho toàn bộ AirData
 
 // ============================================================
-// 10. BỘ LỌC NHIỄU (Filters) — EMA/SMA hai tầng (CLAUDE.md Mục 7)
+// 12. BỘ LỌC NHIỄU (Filters) — EMA/SMA hai tầng (CLAUDE.md Mục 7)
 // ============================================================
 
 inline constexpr size_t   FILTER_WINDOW_SIZE   = 5;     // Cửa sổ SMA humidity (hợp lệ 3..5)
@@ -212,7 +246,7 @@ inline constexpr float    SANITY_PM_MIN        =     0.0f;   // µg/m³
 inline constexpr float    SANITY_PM_MAX        =   500.0f;   // µg/m³
 
 // ============================================================
-// 11. HIỆU CHUẨN & DRIFT SELF-CHECK
+// 13. HIỆU CHUẨN & DRIFT SELF-CHECK
 // ============================================================
 
 // NFR: lệch > 10% so với baseline → set calib_needed = true + MQTT alert
@@ -232,20 +266,33 @@ inline constexpr float    ACCURACY_INDEX_PCT   = 10.0f; // AQI/Comfort(THI)/CO2 
 // Celsius quá nhạy khi baseline gần 0 (vd 0.5°C lệch ở baseline=5°C = 10%).
 inline constexpr float    DRIFT_TEMP_ABS_C     = ACCURACY_TEMP_C; // = 0.5°C
 
+// Drift độ ẩm RH dùng SAI SỐ TUYỆT ĐỐI (%RH) theo đúng chỉ tiêu hiệu chuẩn
+// ACCURACY_HUMI_RH (±3%RH) — chặt hơn và đúng đơn vị so với dev% 10%.
+inline constexpr float    DRIFT_HUMI_ABS_PCT   = ACCURACY_HUMI_RH; // = 3.0 %RH
+
 // ============================================================
-// 12. NVS — KEYS LƯU HIỆU CHUẨN
+// 14. NVS — KEYS LƯU HIỆU CHUẨN
 // ============================================================
 
 inline constexpr const char *NVS_NAMESPACE         = "aq01_calib";
 inline constexpr const char *NVS_KEY_BL_TEMP       = "bl_temp";
 inline constexpr const char *NVS_KEY_BL_HUMI       = "bl_humi";
 inline constexpr const char *NVS_KEY_BL_PM25       = "bl_pm25";
+inline constexpr const char *NVS_KEY_BL_PM10       = "bl_pm10";
 inline constexpr const char *NVS_KEY_BL_CO2        = "bl_co2";
-inline constexpr const char *NVS_KEY_BL_GAS        = "bl_gas";
+inline constexpr const char *NVS_KEY_BL_PRESSURE   = "bl_press";
+inline constexpr const char *NVS_KEY_BL_AQI        = "bl_aqi";
+inline constexpr const char *NVS_KEY_BL_COMFORT    = "bl_comfort";
 inline constexpr const char *NVS_KEY_LAST_CALIB_TS = "last_calib_ts";
 
+// Bitmask 3 nhóm baseline (BME680/PMS5003/MQ135) — xem DataFusion.hpp §6.5.
+// Thiếu key này (NVS cũ trước khi có per-group baseline) → DataFusion coi
+// như cả 3 nhóm đã hợp lệ (0b111), vì code cũ chỉ ghi baseline khi cả 3
+// cảm biến đều ready.
+inline constexpr const char *NVS_KEY_BL_MASK       = "bl_mask";
+
 // ============================================================
-// 13. FREERTOS TASK CONFIG
+// 15. FREERTOS TASK CONFIG
 // ============================================================
 
 inline constexpr uint32_t TASK_STACK_SENSOR_WORDS   = 4096;
@@ -257,36 +304,5 @@ inline constexpr uint32_t TASK_PRIO_SENSOR          = 5;
 inline constexpr uint32_t TASK_PRIO_NETWORK         = 4;
 inline constexpr uint32_t TASK_PRIO_DISPLAY         = 3;
 inline constexpr uint32_t TASK_PRIO_STORAGE         = 2;
-
-// ============================================================
-// 14. COMFORT INDEX (THI) — DataFusion / DisplayManager
-// ============================================================
-
-// THI = T - K1*(1 - RH_SCALE*RH)*(T - K2)  (DataFusion.hpp §5.1)
-inline constexpr float    COMFORT_DI_K1       = 0.55f;
-inline constexpr float    COMFORT_DI_K2       = 14.5f;
-inline constexpr float    COMFORT_DI_RH_SCALE = 0.01f;
-
-// Ngưỡng diễn giải dải DI, °C (DataFusion.hpp §5.2):
-//   DI < OK             : de chiu
-//   OK   <= DI < WARM   : hoi nong
-//   WARM <= DI < HOT    : nong kho chiu
-//   HOT  <= DI < SEVERE : rat kho chiu
-//   DI >= SEVERE        : nguy co stress nhiet
-inline constexpr float    COMFORT_DI_OK       = 21.0f;
-inline constexpr float    COMFORT_DI_WARM     = 24.0f;
-inline constexpr float    COMFORT_DI_HOT      = 27.0f;
-inline constexpr float    COMFORT_DI_SEVERE   = 29.0f;
-
-// ============================================================
-// 15. CO2 — DẢI PHÂN LOẠI ĐỊNH TÍNH (DisplayManager)
-// ============================================================
-// Tham chiếu ASHRAE: <1000ppm thông gió tốt, 1000-2000ppm gây buồn ngủ/giảm
-// tập trung, >2000ppm kém. Dùng để ánh xạ data.co2_ppm -> nhãn "Tot/TB/Xau".
-//   CO2 <= CO2_GOOD_MAX            : Tot
-//   CO2_GOOD_MAX < CO2 <= MODERATE : TB
-//   CO2 > CO2_MODERATE_MAX         : Xau
-inline constexpr float    CO2_GOOD_MAX     = 1000.0f; // ppm
-inline constexpr float    CO2_MODERATE_MAX = 2000.0f; // ppm
 
 } // namespace Cfg

@@ -23,6 +23,16 @@ public:
         HAZARDOUS  = 5,
     };
 
+    // Thang Discomfort Index (Thom DI) ngoài đời thực — 6 mức, đối xứng với AqiCategory.
+    enum class ComfortCategory : uint8_t {
+        COMFORTABLE  = 0,  // DI < OK            : dễ chịu
+        SLIGHTLY_HOT = 1,  // OK   <= DI < WARM  : hơi nóng
+        HOT          = 2,  // WARM <= DI < HOT   : nóng khó chịu
+        VERY_HOT     = 3,  // HOT  <= DI < SEVERE: rất khó chịu
+        HEAT_STRESS  = 4,  // SEVERE <= DI < DANGER: nguy cơ stress nhiệt
+        DANGER       = 5,  // DI >= DANGER       : cấp cứu y tế / nguy hiểm tính mạng
+    };
+
     enum class AlertLevel : uint8_t {
         NONE     = 0,
         WARNING  = 1,
@@ -41,6 +51,7 @@ public:
 
     AlertLevel getAlertLevel() const;
     AqiCategory lastCategory() const;
+    ComfortCategory lastComfortCategory() const;
     bool hasBaseline() const;
     int64_t lastCalibrationTimestamp() const;
     const char *calibReason() const;
@@ -50,14 +61,25 @@ private:
         float temperature;
         float humidity;
         float pm25;
+        float pm10;
         float co2;
-        float gas_resistance;
+        float pressure;
+        float aqi;
+        float comfort_index;
     } baseline_;
 
     int64_t last_calib_ts_;
-    bool has_baseline_;
+
+    // Bitmask 3 nhóm baseline — bit set = nhóm đó đã có baseline hợp lệ.
+    // hasBaseline() trả về (baseline_mask_ != 0). Xem §6.5.
+    uint8_t baseline_mask_;
+    static constexpr uint8_t BASELINE_BME680_BIT  = 1u << 0; // temperature, humidity, pressure, comfort_index
+    static constexpr uint8_t BASELINE_PMS5003_BIT = 1u << 1; // pm25, pm10, aqi
+    static constexpr uint8_t BASELINE_MQ135_BIT   = 1u << 2; // co2
+
     AlertLevel last_alert_level_;
     AqiCategory last_category_;
+    ComfortCategory last_comfort_category_;
     char last_calib_reason_[32];
 
     nvs_handle_t nvs_handle_;
@@ -72,9 +94,9 @@ private:
     esp_err_t loadBaseline();
     esp_err_t saveBaseline(int64_t timestamp);
 
-    void initializeBaselineFromData(const AirData &data, bool time_synced);
+    void initializeBaselineGroup(uint8_t group_bit, const AirData &data, bool time_synced);
     void computeAqi(AirData &data);
-    void computeComfort(AirData &data) const;
+    void computeComfort(AirData &data);
     void driftSelfCheck(AirData &data, bool time_synced);
     void computeAlertLevel(AirData &data);
     float computeAqiSubindex(float concentration, const float *breakpoints) const;
@@ -119,16 +141,25 @@ private:
 // ----------------------------------------------------------------------------
 //   ĐẦU VÀO: data.temperature (°C), data.humidity (%RH); khi data.bme680_ready.
 //
-//   5.1 Chỉ số nhiệt-ẩm THI (Temperature-Humidity Index, °C):
+//   5.1 Chỉ số nhiệt-ẩm THI (Discomfort Index — Thom DI, °C):
 //         THI = T − 0.55·(1 − 0.01·RH)·(T − 14.5)
-//       → ghi vào data.comfort_index (float). (Có thể chuẩn hoá về thang 0–100
-//         nếu Display cần — quyết định ở DisplayManager, KHÔNG ở đây.)
+//       → ghi vào data.comfort_index (float).
 //
-//   5.2 Diễn giải dải DI (để Display/Alert dùng, hằng ngưỡng ở config.hpp §14):
-//         DI < 21  : dễ chịu | 21–24 : hơi nóng | 24–27 : nóng khó chịu
-//         27–29 : rất khó chịu | ≥ 29 : nguy cơ stress nhiệt.
+//   5.2 comfort_category suy ra TỪ GIÁ TRỊ data.comfort_index theo thang DI
+//       ngoài đời thực (Thom Discomfort Index, 6 mức — đối xứng với AQI §3.4),
+//       so sánh tuần tự với Cfg::COMFORT_DI_OK/WARM/HOT/SEVERE/DANGER
+//       (config.hpp §14):
+//         DI < OK            → 0 COMFORTABLE  (dễ chịu)
+//         OK   <= DI < WARM  → 1 SLIGHTLY_HOT  (hơi nóng)
+//         WARM <= DI < HOT   → 2 HOT           (nóng khó chịu)
+//         HOT  <= DI < SEVERE→ 3 VERY_HOT      (rất khó chịu)
+//         SEVERE <= DI < DANGER → 4 HEAT_STRESS (nguy cơ stress nhiệt)
+//         DI >= DANGER       → 5 DANGER        (cấp cứu y tế / nguy hiểm tính mạng)
+//       → ghi vào data.comfort_category (uint8_t, theo enum ComfortCategory §2).
+//       Dùng bởi computeAlertLevel (§8) VÀ DisplayManager (chỉ map số→nhãn,
+//       KHÔNG tự so ngưỡng).
 //
-//   5.3 Hệ số 0.55 / 14.5 / 0.01 (và các ngưỡng dải) KHAI BÁO TRONG config.hpp
+//   5.3 Hệ số 0.55 / 14.5 / 0.01 và các ngưỡng dải DI KHAI BÁO TRONG config.hpp
 //       (§14) — không hardcode (CLAUDE.md §4). NFR: sai số lặp Comfort ≤ 10%
 //       (CLAUDE.md §3).
 //
@@ -137,16 +168,45 @@ private:
 // ----------------------------------------------------------------------------
 //   Hằng dùng: Cfg::DRIFT_THRESHOLD_PCT (10%), Cfg::CALIB_INTERVAL_SEC (30 ngày).
 //   Key NVS:   Cfg::NVS_NAMESPACE + NVS_KEY_BL_TEMP/BL_HUMI/BL_PM25/BL_CO2/
-//              NVS_KEY_LAST_CALIB_TS (config.hpp §12).
+//              NVS_KEY_BL_MASK/NVS_KEY_LAST_CALIB_TS (config.hpp §12, §14).
 //
-//   6.1 So lệch mỗi chu kỳ (chỉ trên kênh có cờ ready):
+//   BASELINE THEO 3 NHÓM ĐỘC LẬP (baseline_mask_, bit per nhóm — xem class
+//   private members): mỗi nhóm được chốt baseline NGAY khi cờ *_ready tương
+//   ứng của nhóm đó lần đầu = true, KHÔNG chờ 2 nhóm còn lại (CLAUDE.md đề
+//   xuất: cảm biến nào warmup xong dùng ngay).
+//     - BASELINE_BME680_BIT  ⊂ {temperature, humidity, pressure,
+//       comfort_index} — gate bởi data.bme680_ready.
+//     - BASELINE_PMS5003_BIT ⊂ {pm25, pm10, aqi}        — gate bởi data.pms5003_ready.
+//     - BASELINE_MQ135_BIT   ⊂ {co2}                     — gate bởi data.mq135_ready.
+//   hasBaseline() == (baseline_mask_ != 0): "có ít nhất 1 nhóm đã baseline".
+//
+//   6.1 So lệch mỗi chu kỳ (chỉ trên kênh có cờ ready VÀ nhóm tương ứng đã có
+//       baseline — baseline_mask_ & BIT_NHÓM, tránh so với baseline_ rỗng/0):
 //         dev% = |current − baseline| / |baseline| · 100
-//       Tính cho T, RH, PM2.5, CO2. Nếu BẤT KỲ kênh nào dev% > DRIFT_THRESHOLD_PCT
-//       → set data.calib_needed = true (kèm lý do, ví dụ "CALIB_DRIFT_TEMP").
+//       Tính cho PM2.5, PM10, CO2. Nếu BẤT KỲ kênh nào dev% > DRIFT_THRESHOLD_PCT
+//       → set data.calib_needed = true (kèm lý do, ví dụ "CALIB_DRIFT_PM25"
+//       hoặc "CALIB_DRIFT_PM10").
+//       T và RH dùng SAI SỐ TUYỆT ĐỐI thay vì dev% (xem §10/§11):
+//         |T_now − T_baseline|  > DRIFT_TEMP_ABS_C  (0.5°C)  → "CALIB_DRIFT_TEMP"
+//         |RH_now − RH_baseline| > DRIFT_HUMI_ABS_PCT (3%RH) → "CALIB_DRIFT_HUMI"
+//
+//   6.1b "Sai số lặp" chỉ số suy diễn (CLAUDE.md §3 — AQI/Comfort(THI)/CO2 ≤ 10%):
+//       CO2 đã được phủ bởi §6.1 (cùng DRIFT_THRESHOLD_PCT=10%). Với AQI và
+//       comfort_index (chỉ khi pms5003_ready / bme680_ready, nhóm tương ứng đã
+//       có baseline, và giá trị hữu hạn, baseline ≠ 0 để tránh chia 0):
+//         dev% = |current − baseline| / |baseline| · 100
+//       Nếu dev% > ACCURACY_INDEX_PCT (10%) → calib_needed=true, lý do
+//       "CALIB_DRIFT_AQI" / "CALIB_DRIFT_COMFORT". baseline_.aqi/comfort_index
+//       được chốt SAU khi computeAqi()/computeComfort() đã chạy trong process()
+//       (initializeBaselineGroup/confirmRecalibration phải đọc data.aqi/
+//       data.comfort_index ĐÃ TÍNH của chu kỳ hiện tại — process() gọi
+//       computeAqi/computeComfort TRƯỚC initializeBaselineGroup/driftSelfCheck).
 //
 //   6.2 Quá hạn thời gian: now − last_calib_timestamp > CALIB_INTERVAL_SEC
 //       → set data.calib_needed = true (lý do "CALIB_OVERDUE_30D").
-//       (Lấy 'now' theo §7.)
+//       (Lấy 'now' theo §7.) last_calib_timestamp chỉ được set khi NHÓM
+//       BASELINE ĐẦU TIÊN (bao giờ) được chốt (baseline_mask_ 0 → non-zero) —
+//       các nhóm chốt sau đó KHÔNG đẩy lại mốc này (xem §6.5).
 //
 //   6.3 KHÔNG tự bù trừ, KHÔNG tự ghi đè baseline (CLAUDE.md §3, §4): khi
 //       calib_needed=true chỉ PHÁT CỜ + để hệ thống cảnh báo; chờ người dùng.
@@ -154,12 +214,26 @@ private:
 //   6.4 Xác nhận tái hiệu chuẩn (confirmRecalibration — §1):
 //       - Kích hoạt khi nhận lệnh MQTT "confirm_calib" (NetworkManager nhận →
 //         command-callback do main.cpp đăng ký gọi DataFusion::confirmRecalibration).
-//       - Ghi baseline mới = giá trị ổn định hiện tại; last_calib_timestamp = now;
-//         nvs_set_* + nvs_commit(); clear calib_needed.
+//       - PER-GROUP: chỉ reset baseline của (các) nhóm hiện đang *_ready —
+//         set bit tương ứng trong baseline_mask_. Nhóm chưa ready giữ baseline
+//         cũ (nếu có); nếu drift do nhóm đó gây ra, chu kỳ process() kế tiếp
+//         sẽ driftSelfCheck() và re-assert calib_needed=true.
+//       - Yêu cầu tối thiểu: ÍT NHẤT 1 trong 3 cờ *_ready = true, nếu không trả
+//         ESP_ERR_INVALID_STATE (không có gì để hiệu chuẩn).
+//       - last_calib_timestamp = now (LUÔN cập nhật — đây là hành động chủ
+//         động của người dùng, khác với mốc "lần đầu" ở §6.5/§6.2);
+//         nvs_set_* (bao gồm bl_mask) + nvs_commit(); clear calib_needed.
 //
-//   6.5 Khởi tạo baseline lần đầu (init không thấy key NVS): chốt baseline từ MẪU
-//       ỔN ĐỊNH ĐẦU TIÊN (tất cả *_ready và đã qua warmup) — coi như hiệu chuẩn
-//       gốc tại hiện trường; ghi NVS + timestamp. KHÔNG dùng mẫu warmup làm baseline.
+//   6.5 Khởi tạo baseline lần đầu (init không thấy key NVS hoặc thiếu bit
+//       trong baseline_mask_): mỗi nhóm tự chốt baseline từ MẪU ỔN ĐỊNH ĐẦU
+//       TIÊN của riêng nhóm đó (khi *_ready tương ứng lần đầu = true sau
+//       warmup) — KHÔNG chờ 2 nhóm còn lại, KHÔNG dùng mẫu warmup làm baseline.
+//       Mỗi lần 1 nhóm được chốt: ghi NVS (8 blob hiện có + bl_mask); nếu đây
+//       là nhóm ĐẦU TIÊN (baseline_mask_ trước đó == 0) thì đồng thời ghi
+//       last_calib_timestamp = now — các nhóm chốt sau giữ nguyên timestamp này.
+//       Backward-compat: NVS cũ (trước khi có bl_mask) nhưng có đủ 8 blob →
+//       coi baseline_mask_ = 0b111 (tất cả nhóm hợp lệ, vì code cũ chỉ ghi khi
+//       cả 3 cảm biến ready).
 //
 //   6.6 Phát cảnh báo MQTT: DataFusion KHÔNG tự publish. Khi data.calib_needed=true,
 //       NetworkManager::buildJson() chèn field "calib_alert": true (đối số
@@ -179,17 +253,29 @@ private:
 // ============================================================================
 // 8. QUYẾT ĐỊNH CẢNH BÁO LED / BUZZER (computeAlertLevel)
 // ----------------------------------------------------------------------------
-//   ĐẦU VÀO: data.aqi_category (§3.4), data.co2_ppm, data.pm2_5.
-//   Hằng ngưỡng: Cfg::ALERT_CO2_PPM, Cfg::ALERT_PM25_UGM3 (config.hpp §8).
+//   ĐẦU VÀO: data.aqi_category (§3.4), data.comfort_category (§5.2),
+//            data.co2_ppm.
+//   Hằng ngưỡng: Cfg::ALERT_CO2_PPM, Cfg::ALERT_CO2_CRITICAL_PPM (config.hpp §8).
 //   Quy tắc tổng hợp:
-//     - aqi_category ≥ 4  → CRITICAL.
-//     - co2_ppm > ALERT_CO2_PPM  HOẶC  pm2_5 > ALERT_PM25_UGM3 → ≥ WARNING
-//       (nâng lên CRITICAL nếu vượt biên xa / category 5).
+//     - aqi_category ≥ 4 (VERY_BAD)        → CRITICAL.
+//     - aqi_category == 3 (BAD)            → ≥ WARNING.
+//     - comfort_category == 5 (DANGER)     → CRITICAL (nguy cơ say nắng/sốc nhiệt).
+//     - comfort_category == 4 (HEAT_STRESS)→ ≥ WARNING.
+//     - co2_ppm > ALERT_CO2_CRITICAL_PPM    → CRITICAL.
+//     - co2_ppm > ALERT_CO2_PPM             → ≥ WARNING.
 //     - còn lại → NONE.
+//   PM2.5/PM10 không có ngưỡng cảnh báo riêng: hai giá trị này đã được gộp
+//   vào aqi_category thông qua AQI_PM25_BP/AQI_PM10_BP (§3.4), nên kiểm tra
+//   thêm ngưỡng nồng độ thô sẽ trùng lặp với quy tắc AQI ở trên.
 //   GHI: kết quả lưu nội bộ (getAlertLevel) — DataFusion KHÔNG chạm GPIO.
 //   main.cpp sở hữu gpio_config() (GPIO25/26/27 LED, GPIO32 Buzzer — CLAUDE.md §5)
 //   và lái output theo AlertLevel + aqi_category trong ≤ ALERT_MAX_LATENCY_MS (3 s).
-//   Chỉ ánh xạ category→LED khi data.sensors_ready để tránh báo động giả lúc warmup.
+//   aqi_category chỉ xét khi data.pms5003_ready: PMS5003_WARMUP_MS = 30s, nên
+//   AQI sẵn sàng rất sớm và cảnh báo AQI nguy hại không bị trễ bởi các cảm
+//   biến khác (MQ135_WARMUP_MS = 20 phút) — phù hợp độ trễ cảnh báo ≤ 3s
+//   (CLAUDE.md §3). comfort_category chỉ xét khi
+//   data.bme680_ready (computeComfort đã set sentinel COMFORTABLE=0 khi chưa
+//   ready, nên không cần thêm guard riêng).
 //
 // ============================================================================
 // 9. LIÊN KẾT MODULE — HÀM/DỮ LIỆU DÙNG TỪ FILE NÀO
@@ -223,7 +309,7 @@ private:
 // ============================================================================
 // 10. HẰNG SỐ TRONG config.hpp (namespace Cfg) — KHÔNG hardcode .cpp
 // ----------------------------------------------------------------------------
-//   TÁI DÙNG: ALERT_CO2_PPM, ALERT_PM25_UGM3, DRIFT_THRESHOLD_PCT,
+//   TÁI DÙNG: ALERT_CO2_PPM, ALERT_CO2_CRITICAL_PPM, DRIFT_THRESHOLD_PCT,
 //     CALIB_INTERVAL_SEC, NVS_KEY_BL_*, NVS_KEY_LAST_CALIB_TS,
 //     ACCURACY_INDEX_PCT, ACCURACY_TEMP_C, MAX_CYCLE_TIME_MS, ALERT_MAX_LATENCY_MS.
 //
@@ -232,21 +318,23 @@ private:
 //     đến từ Kconfig, dùng phân loại category §3.4),
 //     AQI_MAX_INDEX = 500 (clamp trần §3.5).
 //   §11 Drift: DRIFT_TEMP_ABS_C = ACCURACY_TEMP_C (ngưỡng tuyệt đối drift T, §6.1).
+//     DRIFT_HUMI_ABS_PCT = ACCURACY_HUMI_RH (ngưỡng tuyệt đối drift RH, §6.1).
+//     ACCURACY_INDEX_PCT (10%) = ngưỡng dev% cho AQI/comfort_index (§6.1b).
 //   §14 Comfort: COMFORT_DI_K1 = 0.55f, COMFORT_DI_K2 = 14.5f, COMFORT_DI_RH_SCALE
-//     = 0.01f, COMFORT_DI_OK/WARM/HOT/SEVERE (ngưỡng dải §5.2).
+//     = 0.01f, COMFORT_DI_OK/WARM/HOT/SEVERE/DANGER (ngưỡng dải DI 6 mức §5.2).
 //
-//   Baseline.gas_resistance / NVS_KEY_BL_GAS: GIỮ NGUYÊN (không xóa). Hiện
-//     chưa có consumer sau khi bỏ TVOC, nhưng để dành cho gas drift self-check
-//     tương lai (so data.gas_resistance vs baseline, như T/RH/PM2.5/CO2). Vô
-//     hại, không gây lỗi biên dịch. In/publish gas dùng data.gas_resistance
-//     (live, đã có ở NetworkManager), KHÔNG dùng baseline.
+//   Baseline.pressure / NVS_KEY_BL_PRESSURE: GIỮ NGUYÊN (không xóa). Hiện
+//     chưa có consumer, nhưng để dành cho pressure drift self-check tương lai
+//     (so data.pressure vs baseline, như T/RH/PM2.5/CO2). Vô hại, không gây
+//     lỗi biên dịch. In/publish pressure dùng data.pressure (live, đã có ở
+//     NetworkManager), KHÔNG dùng baseline.
 //
 // ============================================================================
 // 11. TRƯỜNG AirData ĐỌC/GHI & QUY TẮC READINESS (DataStructures.hpp)
 // ----------------------------------------------------------------------------
-//   ĐỌC : temperature, humidity, pressure, gas_resistance, pm2_5, pm10, co2_ppm,
-//          bme680_ready, pms5003_ready, mq135_ready, sensors_ready, data_valid, timestamp.
-//   GHI : aqi, aqi_category, comfort_index, calib_needed,
+//   ĐỌC : temperature, humidity, pressure, pm2_5, pm10, co2_ppm,
+//          bme680_ready, pms5003_ready, mq135_ready, data_valid, timestamp.
+//   GHI : aqi, aqi_category, comfort_index, comfort_category, calib_needed,
 //          last_calib_timestamp (CHỈ trong confirmRecalibration / init lần đầu).
 //
 //   QUY TẮC: mỗi chỉ số chỉ tính khi cảm biến nguồn đã ready (§1 process). Khi chưa
@@ -275,6 +363,7 @@ private:
 //   - Dùng TAG riêng (ví dụ "DataFusion") với ESP_LOGI/W/E.
 //   - ESP_LOGW khi phát hiện drift hoặc quá hạn calib; ESP_LOGI khi chốt baseline mới.
 //   - KHÔNG xoá/comment ESP_LOG* khi commit (nguồn debug song song JTAG — §6.5).
-//   - Các biến nên theo dõi qua JTAG: data.aqi, data.comfort_index, data.co2_ppm,
-//     baseline NVS, dev%, AlertLevel — phục vụ nghiệm thu sai số ≤ 10% (CLAUDE.md §3).
+//   - Các biến nên theo dõi qua JTAG: data.aqi, data.comfort_index,
+//     data.comfort_category, data.co2_ppm, baseline NVS, dev%, AlertLevel —
+//     phục vụ nghiệm thu sai số ≤ 10% (CLAUDE.md §3).
 

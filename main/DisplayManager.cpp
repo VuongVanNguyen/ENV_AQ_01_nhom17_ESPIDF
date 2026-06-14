@@ -4,6 +4,7 @@
 #include "esp_timer.h"
 #include <cstdio>
 #include <cstring>
+#include <cmath>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -15,6 +16,21 @@ static i2c_dev_t* s_pcf_ptr = nullptr;
 // Ký tự tự định nghĩa (CGRAM)
 static const uint8_t char_degree[] = { 0x06, 0x09, 0x09, 0x06, 0x00, 0x00, 0x00, 0x00 }; // Ký tự '°'
 static const uint8_t char_micro[]  = { 0x00, 0x00, 0x11, 0x11, 0x11, 0x13, 0x1D, 0x10 }; // Ký tự 'µ'
+
+// ============================================================================
+// Constructor
+// ============================================================================
+DisplayManager::DisplayManager()
+    : pcf_{},
+      lcd_{},
+      initialized_(false),
+      current_page_(ScreenPage::MAIN_AQI_CI),
+      current_state_(DisplayState::WARMING_UP),
+      shadow_{},
+      current_display_{},
+      blink_state_(true),
+      overlay_active_(false),
+      overlay_expire_us_(0) {}
 
 // ============================================================================
 // HÀM CALLBACK PHẦN CỨNG
@@ -29,13 +45,21 @@ esp_err_t DisplayManager::write_cb(const hd44780_t *lcd, uint8_t data) {
 // KHỞI TẠO MODULE
 // ============================================================================
 esp_err_t DisplayManager::init() {
-    ESP_LOGI(TAG, "Initializing LCD via PCF8574...");
+    ESP_LOGI(TAG, "Khởi tạo LCD qua PCF8574...");
 
   // 1. Cấu hình PCF8574 descriptor
     // Lưu ý: Ép kiểu (gpio_num_t) để chiều lòng C++
     // Dùng chung Cfg::I2C_PORT với SensorManager::bme680Setup() (CLAUDE.md §4)
     // — bắt buộc để mutex per-port của i2cdev serialize đúng BME680 + PCF8574.
-    ESP_ERROR_CHECK(pcf8574_init_desc(&pcf_, Cfg::PCF8574_I2C_ADDR, static_cast<i2c_port_t>(Cfg::I2C_PORT), (gpio_num_t)Cfg::I2C_SDA_PIN, (gpio_num_t)Cfg::I2C_SCL_PIN));
+    esp_err_t err = pcf8574_init_desc(&pcf_,
+                                       Cfg::PCF8574_I2C_ADDR,
+                                       static_cast<i2c_port_t>(Cfg::I2C_PORT),
+                                       (gpio_num_t)Cfg::I2C_SDA_PIN,
+                                       (gpio_num_t)Cfg::I2C_SCL_PIN);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "PCF8574 khởi tạo thất bại: %s", esp_err_to_name(err));
+        return err;
+    }
     s_pcf_ptr = &pcf_;
 
     // 2. Cấu hình driver HD44780
@@ -60,9 +84,9 @@ esp_err_t DisplayManager::init() {
     lcd_.pins.bl = 3;
     
     // 3. Khởi tạo chuỗi lệnh phần cứng
-    esp_err_t err = hd44780_init(&lcd_);
+    err = hd44780_init(&lcd_);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "LCD Init failed! Check I2C wiring or Address.");
+        ESP_LOGE(TAG, "LCD khởi tạo thất bại! Kiểm tra dây nối I2C hoặc địa chỉ.");
         return err;
     }
 
@@ -80,9 +104,9 @@ esp_err_t DisplayManager::init() {
     initialized_ = true;
     
     // Màn hình chào Booting
-    showMessage("   ENV-AQ-01   ", "  Khoi dong...  ");
+    showMessage("   ENV-AQ-01   ", "  Starting...  ");
     
-    ESP_LOGI(TAG, "LCD Initialized Successfully");
+    ESP_LOGI(TAG, "LCD khởi tạo thành công.");
     return ESP_OK;
 }
 
@@ -107,8 +131,8 @@ void DisplayManager::update(const AirData &data) {
     memset(shadow_, ' ', sizeof(shadow_));
 
     if (current_state_ == DisplayState::CALIB_ALERT) {
-        snprintf(shadow_[0], 17, "!-CALIB NEEDED-!");
-        snprintf(shadow_[1], 17, "  Check Sensor  ");
+        snprintf(shadow_[0], 17, "  CALIB NEEDED  ");
+        snprintf(shadow_[1], 17, "  CHECK SENSOR  ");
     } 
     else if (current_state_ == DisplayState::WARMING_UP) {
         snprintf(shadow_[0], 17, "   WARMING UP   ");
@@ -152,19 +176,33 @@ void DisplayManager::evaluateState(const AirData &data) {
 // RENDER NỘI DUNG RA BUFFER ẢO (O(1) String Formatting)
 // ============================================================================
 void DisplayManager::renderToShadow(const AirData &data) {
-    // 2/3 trang (MAIN_AQI, MAIN_THI) ưu tiên 3 chỉ số chính AQI/THI/CO2 (kèm nhãn
+    // 2/3 trang (MAIN_AQI_CI, MAIN_CO2_PM) ưu tiên các chỉ số chính AQI/CI/CO2 (kèm nhãn
     // định tính); 1/3 trang (DETAIL) là nhóm phụ T/RH/P — đúng tỉ lệ ưu tiên CLAUDE.md §3.
     switch (current_page_) {
-        case ScreenPage::MAIN_AQI:
+        case ScreenPage::MAIN_AQI_CI:
             {
                 if (data.pms5003_ready) {
                     const char* aqi_labels[] = {"Tot", "TB", "Kem", "Xau", "R.Xau", "Nguy"};
                     uint8_t aqi_cat = (data.aqi_category <= 5) ? data.aqi_category : 5;
-                    snprintf(shadow_[0], 17, "AQI:%03d %s", (int)data.aqi, aqi_labels[aqi_cat]);
+                    snprintf(shadow_[0], 17, "AQI:%03d %s", (int)lroundf(data.aqi), aqi_labels[aqi_cat]);
                 } else {
                     snprintf(shadow_[0], 17, "AQI: WARMING UP");
                 }
 
+                if (data.bme680_ready) {
+                    // Nhãn CI: data.comfort_category đã được DataFusion phân loại
+                    // theo thang Thom DI 6 mức (config.hpp §14) — Display chỉ map số→nhãn.
+                    const char* ci_labels[] = {"Tot", "Am", "Nong", "Kho", "Nguy", "C.Cuu"};
+                    uint8_t ci_cat = (data.comfort_category <= 5) ? data.comfort_category : 5;
+                    snprintf(shadow_[1], 17, "CI:%4.1f %s", data.comfort_index, ci_labels[ci_cat]);
+                } else {
+                    snprintf(shadow_[1], 17, "CI: WARMING UP");
+                }
+            }
+            break;
+
+        case ScreenPage::MAIN_CO2_PM:
+            {
                 if (data.mq135_ready) {
                     // Phân loại CO2 theo Cfg::CO2_GOOD_MAX/CO2_MODERATE_MAX (config.hpp §15)
                     const char* co2_labels[] = {"Tot", "TB", "Xau"};
@@ -176,23 +214,9 @@ void DisplayManager::renderToShadow(const AirData &data) {
                     } else {
                         co2_cat = 2;
                     }
-                    snprintf(shadow_[1], 17, "CO2:%04d ppm %s", (int)data.co2_ppm, co2_labels[co2_cat]);
+                    snprintf(shadow_[0], 17, "CO2:%04d ppm %s", (int)lroundf(data.co2_ppm), co2_labels[co2_cat]);
                 } else {
-                    snprintf(shadow_[1], 17, "CO2: WARMING UP");
-                }
-            }
-            break;
-
-        case ScreenPage::MAIN_THI:
-            {
-                if (data.bme680_ready) {
-                    // Nhãn THI: data.comfort_category đã được DataFusion phân loại
-                    // theo thang Thom DI 6 mức (config.hpp §14) — Display chỉ map số→nhãn.
-                    const char* thi_labels[] = {"Tot", "Am", "Nong", "Kho", "Nguy", "C.Cuu"};
-                    uint8_t thi_cat = (data.comfort_category <= 5) ? data.comfort_category : 5;
-                    snprintf(shadow_[0], 17, "THI:%4.1f %s", data.comfort_index, thi_labels[thi_cat]);
-                } else {
-                    snprintf(shadow_[0], 17, "THI: WARMING UP");
+                    snprintf(shadow_[0], 17, "CO2: WARMING UP");
                 }
 
                 if (data.pms5003_ready) {
@@ -210,8 +234,10 @@ void DisplayManager::renderToShadow(const AirData &data) {
                 // → tối đa "-40.0" = 5 ký tự) và %3d cho humidity (dải sanity
                 // 0..100 → tối đa "100" = 3 ký tự). Tổng = 16 ký tự cho mọi giá
                 // trị hợp lệ — không bao giờ tràn hay lệch cột.
-                snprintf(shadow_[0], 17, "T:%5.1f\x08" "C H:%3d%%", data.temperature, (int)data.humidity); // \x08 là slot 0 (độ)
-                snprintf(shadow_[1], 17, "P:%04d hPa", (int)data.pressure);
+                snprintf(shadow_[0], 17, "T:%5.1f\x08" "C H:%3d%%", data.temperature, (int)lroundf(data.humidity)); // \x08 là slot 0 (độ)
+                // %6.1f cho pressure (dải sanity 300.0..1100.0 hPa → tối đa
+                // "1100.0" = 6 ký tự), còn dư chỗ so với 16 ký tự dòng LCD.
+                snprintf(shadow_[1], 17, "P:%6.1f hPa", data.pressure);
             } else {
                 snprintf(shadow_[0], 17, "T/RH: WARMING UP");
                 snprintf(shadow_[1], 17, "P: WARMING UP");
@@ -251,7 +277,7 @@ void DisplayManager::tick() {
     // [XM-1] Cadence 2-5s (Cfg::LCD_MIN_INTERVAL_MS..LCD_MAX_INTERVAL_MS): DisplayManager
     // không tự ép nhịp — main.cpp phải gọi update(data) rồi tick() mỗi chu kỳ (xem main.cpp).
     if (current_state_ == DisplayState::NORMAL) {
-        // Luân phiên trang hiển thị: MAIN_AQI -> MAIN_THI -> DETAIL -> MAIN_AQI ...
+        // Luân phiên trang hiển thị: MAIN_AQI_CI -> MAIN_CO2_PM -> DETAIL -> MAIN_AQI_CI ...
         uint8_t next_page = static_cast<uint8_t>(current_page_) + 1;
         if (next_page > static_cast<uint8_t>(ScreenPage::DETAIL)) {
             next_page = 0;
@@ -285,4 +311,4 @@ void DisplayManager::showMessage(const char *line1, const char *line2) {
 void DisplayManager::setBacklight(bool on) {
     if (!initialized_) return;
     hd44780_switch_backlight(&lcd_, on);
-}
+} //Có thể bỏ nếu ko dùng đến, hiện tại chưa có caller nào (dead code) — xem [XM-6] trong header.

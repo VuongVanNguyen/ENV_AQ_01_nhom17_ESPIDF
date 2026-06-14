@@ -11,27 +11,27 @@
 #include <hd44780.h>          
 #include <pcf8574.h>          
 
-// §4. ENUM CẦN KHAI BÁO
-// Mô hình 3 trang theo CLAUDE.md §3: 2/3 số trang ưu tiên 3 chỉ số chính
-// (AQI, THI, CO2 — luôn kèm nhãn định tính), 1/3 còn lại là nhóm phụ T/RH/P,
-// luân phiên (rotate) theo tick().
-enum class ScreenPage : uint8_t {
-    MAIN_AQI = 0,   // AQI (kèm nhãn) + CO2 (kèm nhãn) — chỉ số chính
-    MAIN_THI = 1,   // THI/Comfort Index (kèm nhãn) + PM2.5/PM10 — chỉ số chính
-    DETAIL = 2      // Nhiệt độ + Độ ẩm + Áp suất — nhóm phụ
-};
-
-enum class DisplayState : uint8_t {
-    WARMING_UP = 0,     // Chưa CẢM BIẾN NÀO ready (lúc mới khởi động)
-    CALIB_ALERT = 1,    // Cảnh báo Drift / Cần hiệu chuẩn (Ưu tiên cao nhất)
-    NORMAL = 2          // ≥1 cảm biến ready — luân phiên trang, dòng chưa ready in placeholder riêng
-};
-
 // §2. API CÔNG KHAI
 class DisplayManager {
 public:
+    // §4. ENUM CẦN KHAI BÁO
+    // Mô hình 3 trang theo CLAUDE.md §3: 2/3 số trang ưu tiên 3 chỉ số chính
+    // (AQI, CI, CO2 — luôn kèm nhãn định tính), 1/3 còn lại là nhóm phụ T/RH/P,
+    // luân phiên (rotate) theo tick().
+    enum class ScreenPage : uint8_t {
+        MAIN_AQI_CI = 0,  // AQI (kèm nhãn) + CI/Comfort Index (kèm nhãn) — 2 chỉ số chính
+        MAIN_CO2_PM = 1,  // CO2 (kèm nhãn) — chỉ số chính + PM2.5/PM10 — chỉ số phụ
+        DETAIL = 2        // Nhiệt độ + Độ ẩm + Áp suất — nhóm phụ
+    };
+
+    enum class DisplayState : uint8_t {
+        WARMING_UP = 0,     // Chưa CẢM BIẾN NÀO ready (lúc mới khởi động)
+        CALIB_ALERT = 1,    // Cảnh báo Drift / Cần hiệu chuẩn (Ưu tiên cao nhất)
+        NORMAL = 2          // ≥1 cảm biến ready — luân phiên trang, dòng chưa ready in placeholder riêng
+    };
+
     // Đảm bảo chỉ có 1 instance duy nhất điều khiển phần cứng
-    DisplayManager() = default;
+    DisplayManager();
     ~DisplayManager() = default;
     DisplayManager(const DisplayManager&) = delete;
     DisplayManager& operator=(const DisplayManager&) = delete;
@@ -61,22 +61,22 @@ private:
     i2c_dev_t pcf_;     // Descriptor cho thiết bị PCF8574 (kết nối với i2cdev)
     hd44780_t lcd_;     // Descriptor cấu hình chân cho driver hd44780
     
-    bool initialized_ = false;
-    ScreenPage current_page_ = ScreenPage::MAIN_AQI;
-    DisplayState current_state_ = DisplayState::WARMING_UP;
+    bool initialized_;
+    ScreenPage current_page_;
+    DisplayState current_state_;
 
     // §6.2 Framebuffer phần mềm (16 ký tự + 1 ký tự null terminator cho mỗi dòng)
-    char shadow_[2][17] = {0};         // Buffer chứa nội dung MUỐN hiển thị
-    char current_display_[2][17] = {0}; // Buffer chứa nội dung ĐANG hiển thị thực tế
+    char shadow_[2][17];         // Buffer chứa nội dung MUỐN hiển thị
+    char current_display_[2][17]; // Buffer chứa nội dung ĐANG hiển thị thực tế
 
     // Trạng thái nhấp nháy (Blink) backlight cho CALIB_ALERT — đảo mỗi lần
     // tick() được gọi trong khi current_state_ == CALIB_ALERT.
-    bool blink_state_ = true;
+    bool blink_state_;
 
     // Overlay cho showMessage(): giữ thông báo tối thiểu Cfg::LCD_OVERLAY_MIN_MS
     // trước khi update() được phép vẽ lại frame trạng thái bình thường.
-    bool overlay_active_ = false;
-    int64_t overlay_expire_us_ = 0;
+    bool overlay_active_;
+    int64_t overlay_expire_us_;
 
     // Callback ghi I2C bắt buộc phải có để truyền cho hd44780_init
     static esp_err_t write_cb(const hd44780_t *lcd, uint8_t data);
@@ -94,11 +94,11 @@ private:
 //
 // --- ĐÃ FIX (đợt refactor hiện tại) ---
 // [x] FIX #1  Bỏ hẳn data.tvoc_ppm (field không tồn tại trong AirData) — CLAUDE.md §1.
-// [x] FIX #2  Tái cấu trúc ScreenPage còn 3 trang: MAIN_AQI (AQI+CO2, kèm nhãn),
-//             MAIN_THI (THI+PM2.5/PM10, kèm nhãn), DETAIL (T/RH/P) — 2/3 số trang
-//             ưu tiên 3 chỉ số chính, 1/3 là nhóm phụ T/RH (CLAUDE.md §3).
-// [x] FIX #3  THI in kèm nhãn định tính (Tot/Am/Nong/Kho/Nguy/C.Cuu) ánh xạ
-//             trực tiếp từ data.comfort_category (6 mức, đã phân loại sẵn
+// [x] FIX #2  Tái cấu trúc ScreenPage còn 3 trang: MAIN_AQI_CI (AQI+CI, kèm nhãn),
+//             MAIN_CO2_PM (CO2 kèm nhãn + PM2.5/PM10), DETAIL (T/RH/P) — 2/3 số trang
+//             ưu tiên các chỉ số chính, 1/3 là nhóm phụ T/RH/P (CLAUDE.md §3).
+// [x] FIX #3  CI (Comfort Index) in kèm nhãn định tính (Tot/Am/Nong/Kho/Nguy/C.Cuu)
+//             ánh xạ trực tiếp từ data.comfort_category (6 mức, đã phân loại sẵn
 //             trong DataFusion::computeComfort() theo thang Thom DI — config.hpp §14).
 // [x] FIX #4  Bỏ DisplayState::BOOTING (trạng thái chết, không bao giờ được
 //             evaluateState() set) — mặc định current_state_ = WARMING_UP, đúng
@@ -107,7 +107,7 @@ private:
 // [x] FIX #6  CO2 in kèm nhãn định tính (Tot/TB/Xau) ánh xạ từ config.hpp §15
 //             (CO2_GOOD_MAX/CO2_MODERATE_MAX) — xem [XM-5].
 //
-// >>> NGUYÊN TẮC §3: cả 3 chỉ số chính AQI / THI / CO2 đều in kèm nhãn định tính. ĐẠT.
+// >>> NGUYÊN TẮC §3: cả 3 chỉ số chính AQI / CI / CO2 đều in kèm nhãn định tính. ĐẠT.
 //
 // --- ĐÃ ĐẠT (xác nhận giữ nguyên khi refactor) ---
 // [x] Dùng driver esp-idf-lib hd44780 + pcf8574, KHÔNG dùng LiquidCrystal_I2C (§4).
@@ -151,4 +151,14 @@ private:
 //
 // [XM-5] config.hpp — ĐÃ BỔ SUNG Cfg::CO2_GOOD_MAX / CO2_MODERATE_MAX (§15) để
 //        DisplayManager ánh xạ CO2 → "Tot/TB/Xau" (FIX #6). ĐÃ XONG.
+//
+// [XM-6] (OPTIONAL / LOW PRIORITY — backlog, không phục vụ NFR bắt buộc nào)
+//        setBacklight(bool) — public API "tiết kiệm năng lượng" hiện CHƯA có
+//        caller (dead code). Ý tưởng nếu sau này cần: main.cpp tắt backlight
+//        sau một khoảng idle (NORMAL, không CALIB_ALERT/showMessage mới) để
+//        giảm thêm vài chục mA. Đánh giá: lợi ích nhỏ so với ngân sách 2W
+//        (chủ yếu do ESP32+WiFi), và có thể gây hiểu nhầm "máy hỏng" trên
+//        thiết bị quan trắc luôn hiển thị — chỉ nên làm sau khi main.cpp
+//        Production mode đã chạy ổn và đo công suất thực tế cho thấy cần.
+//        TRẠNG THÁI: KHÔNG triển khai trừ khi có yêu cầu cụ thể.
 // ============================================================================

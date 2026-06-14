@@ -27,9 +27,6 @@
 #include "esp_wifi.h"
 #include "mqtt_client.h"
 
-#include "freertos/FreeRTOS.h"
-#include "freertos/event_groups.h"
-
 #include <atomic>
 #include <functional>
 
@@ -75,7 +72,6 @@ public:
 private:
     esp_netif_t              *netif_;
     esp_mqtt_client_handle_t  mqtt_;
-    EventGroupHandle_t        evt_group_;
 
     // Atomic: được set từ ESP event callback (có thể chạy trên core khác).
     std::atomic<bool> wifi_connected_;

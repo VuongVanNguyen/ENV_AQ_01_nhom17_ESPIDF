@@ -30,6 +30,7 @@
 class Filters {
 public:
     Filters();
+    ~Filters() = default;
 
     // Lọc in-place toàn bộ 8 kênh của AirData.
     // Trình tự: data_valid → readiness flags → Tầng 1 (range) → Tầng 2 (EMA/SMA)

@@ -68,6 +68,15 @@ static void test_all_task(void *) {
 // app_main
 // ============================================================
 extern "C" void app_main() {
+    // [PM-1] Cân nhắc tối ưu công suất (CHƯA triển khai):
+    //   esp_wifi_set_ps(WIFI_PS_MIN_MODEM) (NetworkManager::initWifi) đã xử lý
+    //   phần Wi-Fi của NFR <=2W. Phần CPU/peripheral idle (Dynamic Frequency
+    //   Scaling + Automatic Light Sleep qua CONFIG_PM_ENABLE + esp_pm_configure())
+    //   chưa bật — nếu cần, gọi esp_pm_configure() ở đây, đầu app_main(), trước
+    //   khi tạo task/driver. Chỉ làm sau khi đo công suất thực tế cho thấy cần
+    //   thiết — tickless idle có thể ảnh hưởng timing UART (PMS5003) và I2C
+    //   (BME680/PCF8574), cần test kỹ trước khi bật production.
+
     // NVS bắt buộc cho SensorManager (calibration baseline)
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -134,6 +143,22 @@ extern "C" void app_main() {
     //          esp_err_t err = dataFusion.confirmRecalibration(shared_data, synced);
     //          unlock(shared_data_mutex);
     //          if (err != ESP_OK) ESP_LOGW(...);                 // không retry tự động
+    //
+    // ---- ĐẶC TẢ CHIA SẺ AirData GIỮA PIPELINE (<=300ms) VÀ taskDisplay/taskNetwork ----
+    // [XM-9] Cadence pipeline (SensorManager→Filters→DataFusion, <=300ms, NFR §3) nhanh
+    //        hơn taskDisplay (2-5s) và taskNetwork. Dùng QueueHandle_t length-1 +
+    //        xQueueOverwrite()/xQueuePeek() để publish "AirData mới nhất" cho 2 task
+    //        đó — không polling, không block producer:
+    //          QueueHandle_t airDataQueue = xQueueCreate(1, sizeof(AirData));
+    //          // Producer (pipeline task, cuối mỗi cycle, SAU khi unlock shared_data_mutex):
+    //          xQueueOverwrite(airDataQueue, &shared_data);
+    //          // Consumer (taskDisplay/taskNetwork, đầu mỗi cycle riêng của chúng):
+    //          AirData snapshot; xQueuePeek(airDataQueue, &snapshot, 0);
+    //        airDataQueue KHÔNG thay thế shared_data_mutex ở [XM-7]: nhánh confirm_calib
+    //        cần read-modify-write TRỰC TIẾP lên shared_data (ghi baseline_/calib_needed/
+    //        calib_alert), bắt buộc mutex riêng. Hai cơ chế song song, vai trò khác nhau:
+    //          - shared_data (+ mutex)  : nguồn ghi/sửa của pipeline + cmd_callback.
+    //          - airDataQueue (overwrite): bản snapshot chỉ-đọc cho display/publish.
     ESP_LOGI(TAG, "=== PRODUCTION MODE ===");
 
 #endif

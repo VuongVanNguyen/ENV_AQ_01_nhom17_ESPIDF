@@ -25,10 +25,6 @@
 
 static const char *TAG = "NetworkManager";
 
-// Bit cờ event group — cho phép task khác block chờ kết nối (OTA, test)
-static constexpr EventBits_t BIT_WIFI_OK = BIT0;
-static constexpr EventBits_t BIT_MQTT_OK = BIT1;
-
 // File-scope: SNTP là singleton trong ESP-IDF, flag này cũng là singleton.
 // Được set trong sntpSyncCb() (static) → không thể dùng instance member.
 static std::atomic<bool> s_sntp_synced{false};
@@ -39,7 +35,6 @@ static std::atomic<bool> s_sntp_synced{false};
 NetworkManager::NetworkManager()
     : netif_(nullptr),
       mqtt_(nullptr),
-      evt_group_(nullptr),
       wifi_connected_(false),
       mqtt_connected_(false),
       mqtt_client_id_{},
@@ -50,9 +45,6 @@ NetworkManager::~NetworkManager() {
         esp_mqtt_client_stop(mqtt_);
         esp_mqtt_client_destroy(mqtt_);
     }
-    if (evt_group_) {
-        vEventGroupDelete(evt_group_);
-    }
     esp_netif_sntp_deinit();  // giải phóng SNTP handle (bắt cặp với initSntp)
     // Wi-Fi & netif không tear-down ở dtor — chúng là singleton hệ thống;
     // lifecycle thuộc app_main, không phải NetworkManager.
@@ -62,9 +54,6 @@ NetworkManager::~NetworkManager() {
 // Public init
 // ============================================================
 esp_err_t NetworkManager::init() {
-    evt_group_ = xEventGroupCreate();
-    if (!evt_group_) return ESP_ERR_NO_MEM;
-
     // esp_netif_init() và default event loop là singleton hệ thống —
     // gọi lần 2 trả ESP_ERR_INVALID_STATE → bỏ qua an toàn.
     esp_err_t err = esp_netif_init();
@@ -261,7 +250,6 @@ void NetworkManager::wifiEventHandler(void *arg, esp_event_base_t,
             // Log reason giúp phân biệt: AUTH_FAIL (sai pass) vs AP_NOT_FOUND vs timeout
             auto *evt = static_cast<wifi_event_sta_disconnected_t *>(event_data);
             self->wifi_connected_.store(false);
-            xEventGroupClearBits(self->evt_group_, BIT_WIFI_OK);
             ESP_LOGW(TAG, "Wi-Fi mất kết nối (lí do=%d) — chờ kết nối lại", (int)evt->reason);
             esp_wifi_connect();  // reconnect không block; driver tự retry
             break;
@@ -278,7 +266,6 @@ void NetworkManager::ipEventHandler(void *arg, esp_event_base_t,
         auto *evt = static_cast<ip_event_got_ip_t *>(event_data);
         ESP_LOGI(TAG, "Có IP " IPSTR, IP2STR(&evt->ip_info.ip));
         self->wifi_connected_.store(true);
-        xEventGroupSetBits(self->evt_group_, BIT_WIFI_OK);
         // SNTP tự bắt đầu sync khi mạng available — esp_netif_sntp xử lý nội bộ
     }
 }
@@ -290,7 +277,6 @@ void NetworkManager::mqttEventHandler(void *arg, esp_event_base_t,
     switch (static_cast<esp_mqtt_event_id_t>(id)) {
         case MQTT_EVENT_CONNECTED:
             self->mqtt_connected_.store(true);
-            xEventGroupSetBits(self->evt_group_, BIT_MQTT_OK);
             ESP_LOGI(TAG, "MQTT kết nối thành công (client_id='%s')", self->mqtt_client_id_);
             // Subscribe topic lệnh mỗi lần reconnect — broker không giữ subscription sau disconnect
             esp_mqtt_client_subscribe(self->mqtt_, Cfg::MQTT_TOPIC_CMD, 1);
@@ -299,7 +285,6 @@ void NetworkManager::mqttEventHandler(void *arg, esp_event_base_t,
 
         case MQTT_EVENT_DISCONNECTED:
             self->mqtt_connected_.store(false);
-            xEventGroupClearBits(self->evt_group_, BIT_MQTT_OK);
             ESP_LOGW(TAG, "MQTT mất kết nối — client tự động kết nối lại nếu Wi-Fi sẵn sàng");
             break;
 

@@ -175,6 +175,12 @@ void DataFusion::setSafeSentinel(AirData &data) const {
     data.comfort_category = static_cast<uint8_t>(ComfortCategory::COMFORTABLE);
     data.calib_needed = false;
     data.last_calib_timestamp = last_calib_ts_;
+    data.alert_level = static_cast<uint8_t>(AlertLevel::NONE);
+    data.alert_flags = 0;
+    std::strncpy(data.alert_reason, kNoAlertReason, sizeof(data.alert_reason) - 1);
+    data.alert_reason[sizeof(data.alert_reason) - 1] = '\0';
+    std::strncpy(data.calib_reason, kNoCalibReason, sizeof(data.calib_reason) - 1);
+    data.calib_reason[sizeof(data.calib_reason) - 1] = '\0';
 }
 
 void DataFusion::setReason(const char *reason) {
@@ -526,41 +532,66 @@ void DataFusion::driftSelfCheck(AirData &data, bool time_synced) {
 }
 
 void DataFusion::computeAlertLevel(AirData &data) {
-    last_alert_level_ = AlertLevel::NONE;
+    AlertLevel level = AlertLevel::NONE;
+    const char *reason = kNoAlertReason;
+    uint16_t flags = 0;
 
-    if (!data.data_valid) {
-        return;
-    }
+    // Chỉ nâng (level, reason) khi mức mới NGHIÊM TRỌNG HƠN mức hiện tại —
+    // giữ lý do của điều kiện CRITICAL/WARNING đầu tiên đạt mức cao nhất.
+    auto consider = [&](AlertLevel candidate, const char *candidate_reason) {
+        if (candidate > level) {
+            level = candidate;
+            reason = candidate_reason;
+        }
+    };
 
-    if (data.aqi_category >= static_cast<uint8_t>(AqiCategory::VERY_BAD)) {
-        last_alert_level_ = AlertLevel::CRITICAL;
-    } else if (data.aqi_category >= static_cast<uint8_t>(AqiCategory::BAD)) {
-        if (last_alert_level_ != AlertLevel::CRITICAL) {
-            last_alert_level_ = AlertLevel::WARNING;
+    if (data.data_valid) {
+        if (data.aqi_category >= static_cast<uint8_t>(AqiCategory::VERY_BAD)) {
+            consider(AlertLevel::CRITICAL, "AQI_HAZARDOUS");
+            flags |= FLAG_AQI_HAZARDOUS;
+        } else if (data.aqi_category >= static_cast<uint8_t>(AqiCategory::BAD)) {
+            consider(AlertLevel::WARNING, "AQI_BAD");
+            flags |= FLAG_AQI_BAD;
+        }
+
+        if (data.comfort_category >= static_cast<uint8_t>(ComfortCategory::DANGER)) {
+            consider(AlertLevel::CRITICAL, "COMFORT_DANGER");
+            flags |= FLAG_COMFORT_DANGER;
+        } else if (data.comfort_category >= static_cast<uint8_t>(ComfortCategory::VERY_HOT)) {
+            consider(AlertLevel::WARNING, "COMFORT_VERY_HOT");
+            flags |= FLAG_COMFORT_VERY_HOT;
+        }
+
+        if (data.mq135_ready && data.co2_ppm > Cfg::ALERT_CO2_CRITICAL_PPM) {
+            consider(AlertLevel::CRITICAL, "CO2_CRITICAL");
+            flags |= FLAG_CO2_CRITICAL;
+        } else if (data.mq135_ready && data.co2_ppm > Cfg::ALERT_CO2_PPM) {
+            consider(AlertLevel::WARNING, "CO2_WARNING");
+            flags |= FLAG_CO2_WARNING;
+        }
+
+        // calib_needed chỉ nâng alert_level lên WARNING — nếu AQI/Comfort/CO2
+        // đã đạt CRITICAL ở trên, alert_reason giữ lý do CRITICAL đó. Lý do
+        // drift cụ thể không bị mất: được ghi riêng vào data.calib_reason
+        // ngay dưới đây, độc lập với alert_reason.
+        if (data.calib_needed) {
+            consider(AlertLevel::WARNING, last_calib_reason_);
+            flags |= FLAG_CALIB_NEEDED;
         }
     }
 
-    if (data.comfort_category >= static_cast<uint8_t>(ComfortCategory::DANGER)) {
-        last_alert_level_ = AlertLevel::CRITICAL;
-    } else if (data.comfort_category >= static_cast<uint8_t>(ComfortCategory::VERY_HOT)) {
-        if (last_alert_level_ != AlertLevel::CRITICAL) {
-            last_alert_level_ = AlertLevel::WARNING;
-        }
-    }
+    last_alert_level_ = level;
+    data.alert_level = static_cast<uint8_t>(level);
+    data.alert_flags = flags;
+    std::strncpy(data.alert_reason, reason, sizeof(data.alert_reason) - 1);
+    data.alert_reason[sizeof(data.alert_reason) - 1] = '\0';
 
-    if (data.mq135_ready && data.co2_ppm > Cfg::ALERT_CO2_CRITICAL_PPM) {
-        last_alert_level_ = AlertLevel::CRITICAL;
-    } else if (data.mq135_ready && data.co2_ppm > Cfg::ALERT_CO2_PPM) {
-        if (last_alert_level_ != AlertLevel::CRITICAL) {
-            last_alert_level_ = AlertLevel::WARNING;
-        }
-    }
-
-    if (data.calib_needed) {
-        if (last_alert_level_ == AlertLevel::NONE) {
-            last_alert_level_ = AlertLevel::WARNING;
-        }
-    }
+    // calib_reason ĐỘC LẬP với alert_reason — luôn phản ánh lý do drift cụ thể
+    // (CALIB_DRIFT_TEMP/PM25/.../CALIB_OVERDUE_30D) khi calib_needed=true, kể
+    // cả khi alert_reason đang mang lý do AQI/Comfort/CO2 CRITICAL khác.
+    const char *calib_reason = data.calib_needed ? last_calib_reason_ : kNoCalibReason;
+    std::strncpy(data.calib_reason, calib_reason, sizeof(data.calib_reason) - 1);
+    data.calib_reason[sizeof(data.calib_reason) - 1] = '\0';
 }
 
 float DataFusion::computeAqiSubindex(float concentration, const float *breakpoints) const {

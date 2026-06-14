@@ -159,6 +159,26 @@ extern "C" void app_main() {
     //        calib_alert), bắt buộc mutex riêng. Hai cơ chế song song, vai trò khác nhau:
     //          - shared_data (+ mutex)  : nguồn ghi/sửa của pipeline + cmd_callback.
     //          - airDataQueue (overwrite): bản snapshot chỉ-đọc cho display/publish.
+    //
+    // ---- ĐẶC TẢ CẢNH BÁO VƯỢT NGƯỠNG (AirData.alert_level/alert_reason — DataFusion.hpp §8/§11) ----
+    // [XM-10] publishData() (gọi mỗi chu kỳ taskNetwork) đã tự chèn "alert_level"/
+    //         "alert_reason"/"alert_flags"/"calib_reason" vào JSON
+    //         (NetworkManager::buildJson) — dashboard có "live gauge" mức nguy
+    //         hiểm hiện tại (kể cả khi nhiều điều kiện CRITICAL/WARNING xảy ra
+    //         đồng thời, qua alert_flags) mà không cần thêm gì ở main.cpp.
+    // [XM-11] Sự kiện publishAlert() (đáp ứng NFR ≤ Cfg::ALERT_MAX_LATENCY_MS = 3s, §8):
+    //           taskNetwork giữ static/local AlertLevel last_published_level = NONE
+    //           (snapshot trước đó, đọc từ airDataQueue).
+    //           Mỗi chu kỳ, so snapshot.alert_level với last_published_level:
+    //             - Nếu KHÁC nhau (tăng lên WARNING/CRITICAL hoặc giảm về NONE) →
+    //               network.publishAlert(snapshot) ngay, rồi cập nhật
+    //               last_published_level = snapshot.alert_level. data.alert_reason
+    //               (lý do CAO NHẤT trong chu kỳ) và data.calib_reason (lý do
+    //               hiệu chuẩn CỤ THỂ, ĐỘC LẬP — "CALIB_DRIFT_TEMP"/"CALIB_DRIFT_PM25"/
+    //               .../"CALIB_OVERDUE_30D"/"NONE") đã có sẵn trong JSON (§8/§11),
+    //               không cần truyền thêm tham số.
+    //             - Nếu GIỐNG nhau → không publish lại (debounce, tránh spam
+    //               MQTT_TOPIC_ALERT khi tình trạng vượt ngưỡng kéo dài nhiều chu kỳ).
     ESP_LOGI(TAG, "=== PRODUCTION MODE ===");
 
 #endif

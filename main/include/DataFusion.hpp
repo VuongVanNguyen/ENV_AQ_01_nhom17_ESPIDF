@@ -39,6 +39,18 @@ public:
         CRITICAL = 2,
     };
 
+    // Bitmask cho AirData::alert_flags (DataStructures.hpp) — mỗi bit set ĐỘC
+    // LẬP khi điều kiện tương ứng đang active, BỔ SUNG cho alert_reason (chỉ
+    // mang lý do CAO NHẤT). Dùng để phát hiện nhiều điều kiện CRITICAL/WARNING
+    // xảy ra đồng thời (ví dụ AQI_HAZARDOUS + COMFORT_DANGER cùng lúc).
+    static constexpr uint16_t FLAG_AQI_BAD          = 1u << 0;
+    static constexpr uint16_t FLAG_AQI_HAZARDOUS    = 1u << 1;
+    static constexpr uint16_t FLAG_COMFORT_VERY_HOT = 1u << 2;
+    static constexpr uint16_t FLAG_COMFORT_DANGER   = 1u << 3;
+    static constexpr uint16_t FLAG_CO2_WARNING      = 1u << 4;
+    static constexpr uint16_t FLAG_CO2_CRITICAL     = 1u << 5;
+    static constexpr uint16_t FLAG_CALIB_NEEDED     = 1u << 6;
+
     DataFusion();
     ~DataFusion();
 
@@ -86,6 +98,7 @@ private:
     mutable SemaphoreHandle_t mutex_;
 
     static constexpr const char *kNoCalibReason = "NONE";
+    static constexpr const char *kNoAlertReason = "NONE";
 
     void setSafeSentinel(AirData &data) const;
     void setReason(const char *reason);
@@ -236,8 +249,11 @@ private:
 //       cả 3 cảm biến ready).
 //
 //   6.6 Phát cảnh báo MQTT: DataFusion KHÔNG tự publish. Khi data.calib_needed=true,
-//       NetworkManager::buildJson() chèn field "calib_alert": true (đối số
-//       alert_reason), và task mạng gọi NetworkManager::publishAlert() (xem §9).
+//       NetworkManager::buildJson() chèn field "calib_alert": true VÀ
+//       "calib_reason" mang lý do drift cụ thể (CALIB_DRIFT_TEMP/PM25/.../
+//       CALIB_OVERDUE_30D — computeAlertLevel ghi từ last_calib_reason_, ĐỘC
+//       LẬP với alert_reason, xem §8), task mạng gọi
+//       NetworkManager::publishAlert() (§9).
 //       Đáp ứng NFR đẩy cảnh báo ≤ Cfg::ALERT_MAX_LATENCY_MS (3 s, CLAUDE.md §3).
 //
 // ============================================================================
@@ -263,13 +279,30 @@ private:
 //     - comfort_category == 4 (HEAT_STRESS)→ ≥ WARNING.
 //     - co2_ppm > ALERT_CO2_CRITICAL_PPM    → CRITICAL.
 //     - co2_ppm > ALERT_CO2_PPM             → ≥ WARNING.
-//     - còn lại → NONE.
+//     - calib_needed == true                → alert_level ≥ WARNING (chỉ nâng
+//       alert_reason nếu chưa có mức cao hơn — AQI/Comfort/CO2 CRITICAL vẫn
+//       thắng và giữ alert_reason của chúng). RIÊNG data.calib_reason LUÔN
+//       được ghi = last_calib_reason_ (lý do drift CỤ THỂ do driftSelfCheck()
+//       set ngay trước đó — "CALIB_DRIFT_TEMP"/"CALIB_DRIFT_PM25"/.../
+//       "CALIB_OVERDUE_30D"), bất kể alert_reason đang là gì — không dùng
+//       nhãn chung "CALIB_NEEDED".
+//     - còn lại → alert_level=NONE, alert_reason="NONE"; calib_reason="NONE"
+//       khi calib_needed=false.
 //   PM2.5/PM10 không có ngưỡng cảnh báo riêng: hai giá trị này đã được gộp
 //   vào aqi_category thông qua AQI_PM25_BP/AQI_PM10_BP (§3.4), nên kiểm tra
 //   thêm ngưỡng nồng độ thô sẽ trùng lặp với quy tắc AQI ở trên.
-//   GHI: kết quả lưu nội bộ (getAlertLevel) — DataFusion KHÔNG chạm GPIO.
+//   GHI: data.alert_level (0/1/2) + data.alert_reason (lý do CAO NHẤT trong
+//   chu kỳ, ví dụ "AQI_HAZARDOUS"/"COMFORT_DANGER"/"CO2_CRITICAL"/"NONE", §11)
+//   + data.calib_reason (lý do hiệu chuẩn CỤ THỂ, ĐỘC LẬP với alert_reason,
+//   §11) + data.alert_flags (bitmask FLAG_* — set ĐỘC LẬP cho TỪNG điều kiện
+//   đang active, song song với consider()/alert_reason, để KHÔNG mất thông
+//   tin khi nhiều điều kiện CRITICAL/WARNING xảy ra đồng thời, §11) VÀ lưu
+//   nội bộ (getAlertLevel). DataFusion KHÔNG chạm GPIO.
 //   main.cpp sở hữu gpio_config() (GPIO25/26/27 LED, GPIO32 Buzzer — CLAUDE.md §5)
 //   và lái output theo AlertLevel + aqi_category trong ≤ ALERT_MAX_LATENCY_MS (3 s).
+//   NetworkManager::buildJson() đưa alert_level/alert_reason/calib_reason vào
+//   MỌI payload (publishData VÀ publishAlert) để dashboard theo dõi mức nguy
+//   hiểm real-time.
 //   aqi_category chỉ xét khi data.pms5003_ready: PMS5003_WARMUP_MS = 30s, nên
 //   AQI sẵn sàng rất sớm và cảnh báo AQI nguy hại không bị trễ bởi các cảm
 //   biến khác (MQ135_WARMUP_MS = 20 phút) — phù hợp độ trễ cảnh báo ≤ 3s
@@ -335,6 +368,7 @@ private:
 //   ĐỌC : temperature, humidity, pressure, pm2_5, pm10, co2_ppm,
 //          bme680_ready, pms5003_ready, mq135_ready, data_valid, timestamp.
 //   GHI : aqi, aqi_category, comfort_index, comfort_category, calib_needed,
+//          alert_level, alert_reason, alert_flags, calib_reason,
 //          last_calib_timestamp (CHỈ trong confirmRecalibration / init lần đầu).
 //
 //   QUY TẮC: mỗi chỉ số chỉ tính khi cảm biến nguồn đã ready (§1 process). Khi chưa

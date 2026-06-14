@@ -188,6 +188,14 @@ esp_err_t NetworkManager::initSntp() {
 // Public API
 // ============================================================
 esp_err_t NetworkManager::publishData(const AirData &data) {
+    return publishJson(Cfg::MQTT_TOPIC_DATA, data);
+}
+
+esp_err_t NetworkManager::publishAlert(const AirData &data) {
+    return publishJson(Cfg::MQTT_TOPIC_ALERT, data);
+}
+
+esp_err_t NetworkManager::publishJson(const char *topic, const AirData &data) {
     if (!mqtt_connected_.load()) return ESP_ERR_INVALID_STATE;
 
     char json[Cfg::MQTT_JSON_BUF_LEN];
@@ -196,20 +204,7 @@ esp_err_t NetworkManager::publishData(const AirData &data) {
 
     // QoS 1: đảm bảo broker nhận ít nhất 1 lần — nếu PUBACK mất, client retransmit
     // và subscriber có thể nhận duplicate. Dedup phía subscriber bằng (ts, client_id).
-    int msg_id = esp_mqtt_client_publish(mqtt_, Cfg::MQTT_TOPIC_DATA,
-                                         json, static_cast<int>(n), 1, 0);
-    return (msg_id >= 0) ? ESP_OK : ESP_FAIL;
-}
-
-esp_err_t NetworkManager::publishAlert(const AirData &data, const char *reason) {
-    if (!mqtt_connected_.load()) return ESP_ERR_INVALID_STATE;
-
-    char json[Cfg::MQTT_JSON_BUF_LEN];
-    size_t n = buildJson(data, json, sizeof(json), reason);
-    if (n == 0) return ESP_FAIL;
-
-    int msg_id = esp_mqtt_client_publish(mqtt_, Cfg::MQTT_TOPIC_ALERT,
-                                         json, static_cast<int>(n), 1, 0);
+    int msg_id = esp_mqtt_client_publish(mqtt_, topic, json, static_cast<int>(n), 1, 0);
     return (msg_id >= 0) ? ESP_OK : ESP_FAIL;
 }
 
@@ -359,8 +354,7 @@ void NetworkManager::dispatchCommand(const char *cmd) {
 // ============================================================
 // JSON builder — cJSON_PrintPreallocated: không alloc heap động
 // ============================================================
-size_t NetworkManager::buildJson(const AirData &data, char *out, size_t out_sz,
-                                 const char *alert_reason) {
+size_t NetworkManager::buildJson(const AirData &data, char *out, size_t out_sz) {
     cJSON *root = cJSON_CreateObject();
     if (!root) return 0;  // heap cạn kiệt — caller log và xử lý
 
@@ -393,14 +387,26 @@ size_t NetworkManager::buildJson(const AirData &data, char *out, size_t out_sz,
     cJSON_AddBoolToObject(root, "pms_ok",     data.pms5003_ready);
     cJSON_AddBoolToObject(root, "mq135_ok",   data.mq135_ready);
 
-    // --- Hiệu chuẩn (Drift Self-Check) ---
-    cJSON_AddBoolToObject  (root, "calib_alert", data.calib_needed);
-    cJSON_AddNumberToObject(root, "calib_ts",    (double)data.last_calib_timestamp);
+    // --- Cảnh báo vượt ngưỡng (DataFusion::computeAlertLevel) ---
+    // alert_level: 0=NONE 1=WARNING 2=CRITICAL; alert_reason mô tả lý do CAO
+    // NHẤT trong chu kỳ (AQI_HAZARDOUS/COMFORT_DANGER/CO2_CRITICAL/CALIB_DRIFT_*/
+    // CALIB_OVERDUE_30D/NONE). Gửi ở MỌI payload (không chỉ alert) để dashboard
+    // hiển thị mức độ nguy hiểm real-time.
+    // alert_flags: bitmask FLAG_* (DataFusion.hpp) BỔ SUNG cho alert_reason —
+    // set ĐỘC LẬP cho từng điều kiện đang active, cho phép dashboard phát
+    // hiện NHIỀU điều kiện CRITICAL/WARNING xảy ra ĐỒNG THỜI (ví dụ AQI và
+    // Comfort cùng CRITICAL trong 1 chu kỳ) mà alert_reason không thể hiện hết.
+    cJSON_AddNumberToObject(root, "alert_level",  data.alert_level);
+    cJSON_AddStringToObject(root, "alert_reason", data.alert_reason);
+    cJSON_AddNumberToObject(root, "alert_flags",  data.alert_flags);
 
-    // Chỉ thêm "reason" trong payload alert — giúp cloud phân biệt nguyên nhân
-    if (alert_reason) {
-        cJSON_AddStringToObject(root, "reason", alert_reason);
-    }
+    // --- Hiệu chuẩn (Drift Self-Check) ---
+    // calib_reason ĐỘC LẬP với alert_reason — luôn cụ thể (CALIB_DRIFT_TEMP/
+    // PM25/.../CALIB_OVERDUE_30D hoặc NONE) khi calib_needed=true, ngay cả khi
+    // alert_reason đang mang lý do AQI/Comfort/CO2 CRITICAL khác.
+    cJSON_AddBoolToObject  (root, "calib_alert",  data.calib_needed);
+    cJSON_AddStringToObject(root, "calib_reason", data.calib_reason);
+    cJSON_AddNumberToObject(root, "calib_ts",     (double)data.last_calib_timestamp);
 
     // fmt=0: compact JSON (không khoảng trắng) — tiết kiệm buffer và băng thông
     size_t n = 0;

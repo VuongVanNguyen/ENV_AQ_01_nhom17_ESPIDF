@@ -54,8 +54,17 @@ public:
     esp_err_t publishData(const AirData &data);
 
     // Publish cảnh báo (calib drift / ngưỡng vượt mức) lên topic alert.
-    // `reason`: chuỗi mô tả lý do cảnh báo (ví dụ "CALIB_DRIFT_TEMP").
-    esp_err_t publishAlert(const AirData &data, const char *reason);
+    // Lý do cảnh báo lấy từ data.alert_reason (DataFusion.hpp §8/§11, đã ghi sẵn
+    // bởi DataFusion::computeAlertLevel — lý do CAO NHẤT trong chu kỳ, có thể
+    // là AQI/Comfort/CO2 ở mức CRITICAL). Lý do hiệu chuẩn CỤ THỂ
+    // ("CALIB_DRIFT_TEMP"/"CALIB_DRIFT_PM25"/.../"CALIB_OVERDUE_30D") luôn nằm
+    // trong data.calib_reason — ĐỘC LẬP với alert_reason, kể cả khi calib
+    // không phải nguyên nhân cao nhất. data.alert_flags (bitmask FLAG_*,
+    // DataFusion.hpp) BỔ SUNG cho alert_reason — cho biết TẤT CẢ điều kiện
+    // đang active, kể cả khi nhiều điều kiện CRITICAL/WARNING xảy ra đồng
+    // thời. buildJson() đưa cả các field này vào JSON — không cần tham số
+    // reason riêng.
+    esp_err_t publishAlert(const AirData &data);
 
     // Đăng ký callback nhận lệnh từ broker (topic MQTT_TOPIC_CMD).
     // Gọi trước init(). Callback chạy trong context của MQTT event task —
@@ -106,6 +115,13 @@ private:
 
     // Serialize AirData → JSON compact (không alloc heap — dùng cJSON_PrintPreallocated).
     // Trả số byte ghi vào `out` (không kèm '\0') hoặc 0 nếu lỗi/buffer nhỏ.
-    static size_t buildJson(const AirData &data, char *out, size_t out_sz,
-                            const char *alert_reason = nullptr);
+    // data.alert_level/data.alert_reason/data.calib_reason (§8/§11) luôn được
+    // đưa vào JSON — dùng chung cho cả publishData và publishAlert, không cần
+    // tham số riêng.
+    static size_t buildJson(const AirData &data, char *out, size_t out_sz);
+
+    // Helper chung cho publishData/publishAlert: serialize + publish lên `topic`.
+    // Trả ESP_ERR_INVALID_STATE nếu MQTT chưa connected, ESP_FAIL nếu serialize
+    // lỗi/buffer nhỏ hoặc publish thất bại.
+    esp_err_t publishJson(const char *topic, const AirData &data);
 };

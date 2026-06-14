@@ -15,7 +15,6 @@ static i2c_dev_t* s_pcf_ptr = nullptr;
 
 // Ký tự tự định nghĩa (CGRAM)
 static const uint8_t char_degree[] = { 0x06, 0x09, 0x09, 0x06, 0x00, 0x00, 0x00, 0x00 }; // Ký tự '°'
-static const uint8_t char_micro[]  = { 0x00, 0x00, 0x11, 0x11, 0x11, 0x13, 0x1D, 0x10 }; // Ký tự 'µ'
 
 // ============================================================================
 // Constructor
@@ -90,9 +89,8 @@ esp_err_t DisplayManager::init() {
         return err;
     }
 
-    // Nạp ký tự đặc biệt vào CGRAM (Slot 0 và 1)
+    // Nạp ký tự đặc biệt vào CGRAM (Slot 0)
     hd44780_upload_character(&lcd_, 0, char_degree);
-    hd44780_upload_character(&lcd_, 1, char_micro);
 
     hd44780_switch_backlight(&lcd_, true);
     

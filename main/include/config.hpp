@@ -106,6 +106,49 @@ inline constexpr const char *SD_MOUNT_POINT    = "/sdcard";
 inline constexpr const char *SD_LOG_FILE       = "/sdcard/airdata.csv";
 inline constexpr const char *SD_OFFLINE_QUEUE  = "/sdcard/offline_queue.bin";
 
+// ---- StorageHelper — Event Log + Offline Buffer (StorageHelper.hpp §4/§5/§9) ----
+inline constexpr const char *SD_EVENT_LOG_FILE = "/sdcard/events.csv";
+inline constexpr const char *SD_OFFLINE_HEAD   = "/sdcard/offline_queue.hdr";
+
+// Nhịp ghi log dữ liệu định kỳ vào SD_LOG_FILE (StorageHelper.hpp §3.1) —
+// nên là bội số của SENSOR_READ_INTERVAL_MS. Từ Kconfig (mặc định 30s).
+inline constexpr uint32_t SD_LOG_INTERVAL_MS   = CONFIG_SD_LOG_INTERVAL_MS;
+
+// fsync sau mỗi N dòng ghi CSV (StorageHelper.hpp §3.5) — ghi thưa (>=30s/dòng)
+// nên ưu tiên an toàn dữ liệu, fsync mỗi dòng.
+inline constexpr uint32_t SD_FSYNC_EVERY_N_ROWS = 1;
+
+// max_files khi mount (StorageHelper.hpp §2.3) — airdata.csv + events.csv +
+// offline_queue.bin + offline_queue.hdr mở đồng thời.
+inline constexpr int      SD_MAX_OPEN_FILES     = 4;
+
+// Xoay vòng airdata.csv (StorageHelper.hpp §3.6): vượt SD_LOG_MAX_BYTES →
+// rename airdata.csv -> airdata.1.csv (dồn thứ tự), mở file mới với header;
+// giữ tối đa SD_LOG_MAX_FILES bản (airdata.csv + airdata.1..N-1.csv).
+inline constexpr long      SD_LOG_MAX_BYTES     = 5L * 1024 * 1024; // 5 MB
+inline constexpr int       SD_LOG_MAX_FILES     = 5;
+
+// Cap dung lượng events.csv (StorageHelper.hpp §4.5) — mật độ thấp, không
+// xoay vòng theo §3.6 nhưng vẫn cần trần để tránh đầy thẻ trong vận hành dài hạn.
+inline constexpr long      SD_EVENT_MAX_BYTES   = 1L * 1024 * 1024; // 1 MB
+
+// Độ dài hàng đợi lệnh tới storageTask (StorageHelper.hpp §6.1).
+inline constexpr size_t    STORAGE_QUEUE_LEN    = 16;
+
+// Trần số record trong offline queue (StorageHelper.hpp §5.2) — vượt mức này
+// thì drop record CŨ NHẤT (FIFO ring) để không ăn hết thẻ.
+inline constexpr size_t    OFFLINE_QUEUE_MAX_RECORDS = 2000;
+
+// Số record phát lại tối đa mỗi lượt drain (StorageHelper.hpp §5.3) — tránh
+// độc chiếm storageTask / flood broker.
+inline constexpr size_t    OFFLINE_DRAIN_BATCH  = 20;
+
+// MAGIC + VERSION ở đầu offline_queue.bin (StorageHelper.hpp §5.1) — phát
+// hiện format cũ không tương thích (struct AirData đổi layout) để bỏ file cũ
+// thay vì phát lại dữ liệu rác.
+inline constexpr uint32_t  OFFLINE_MAGIC          = 0x31305141; // "AQ01" little-endian
+inline constexpr uint16_t  OFFLINE_FORMAT_VERSION = 1;
+
 // ============================================================
 // 5. OUTPUT CẢNH BÁO — GPIO
 // ============================================================

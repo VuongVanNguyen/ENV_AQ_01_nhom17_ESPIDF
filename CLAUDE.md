@@ -48,7 +48,7 @@ project_root/
 | `main/DataFusion.cpp` | Hợp nhất dữ liệu, tính AQI (VN) và Comfort Index theo công thức/thang đo THI (Temperature-Humidity Index, từ T/RH); Drift Self-Check. Không tính TVOC. | — |
 | `main/DisplayManager.cpp` | Điều khiển LCD 16x2 thông qua IC mở rộng chân PCF8574 (I2C). Hiển thị 3 chỉ số chính AQI, THI (Comfort Index), CO2; thêm T/RH nếu vừa màn hình, nếu không thì luân phiên (rotate) trang hiển thị. | `i2c_master_*` |
 | `main/NetworkManager.cpp` | Quản lý WiFi, MQTT (JSON payload), xử lý Buffer khi mất mạng. | `esp_wifi_*`, `esp_mqtt_client_*` |
-| `main/StorageHelper.cpp` | Ghi log dữ liệu vào thẻ SD (định dạng .csv). | `esp_vfs_fat_sdmmc_mount`, `sdmmc_*` |
+| `main/StorageHelper.cpp` | Ghi log dữ liệu định kỳ vào thẻ SD (`.csv`) và ghi nhật ký sự kiện (Event Log) rời rạc. | `esp_vfs_fat_sdmmc_mount`, `sdmmc_*` |
 | `main/main.cpp` | Khởi tạo hệ thống (`extern "C" void app_main()`), tạo và điều phối bằng FreeRTOS tasks — không dùng `vTaskDelay()` làm logic chính. | `xTaskCreate`, `esp_event_loop_*` |
 
 > **Lưu ý:** `NetworkManager::setCommandCallback()` phải được gọi trong `main.cpp` — không phải `DataFusion`.
@@ -75,7 +75,9 @@ project_root/
 
 - **Offline Buffer:** Nếu mất kết nối MQTT, dữ liệu phải được lưu vào hàng đợi trên thẻ SD thông qua `storage_helper`, sử dụng VFS FAT (`esp_vfs_fat_sdmmc_mount()`).
 
-- **Logging:** Dùng `ESP_LOGI`, `ESP_LOGW`, `ESP_LOGE` (từ `esp_log.h`) thay vì `Serial.print()`. Mức log có thể cấu hình qua `idf.py menuconfig` → Component config → Log output.
+- **Event Log:** Ngoài log dữ liệu định kỳ (`Cfg::SD_LOG_FILE`), `StorageHelper` phải cung cấp `logEvent(...)` ghi các **sự kiện rời rạc** — thay đổi `alert_level`/`alert_reason`/`alert_flags`, `calib_needed`/`calib_reason` (bao gồm khi `confirm_calib` được xác nhận), và kết nối/mất kết nối MQTT — vào một file CSV riêng trên SD card (ví dụ `/sdcard/events.csv`), mỗi dòng kèm `timestamp` (Unix time) và loại sự kiện. Việc ghi phải thực hiện qua task riêng (`Cfg::TASK_PRIO_STORAGE`/`TASK_STACK_STORAGE_WORDS`) nhận dữ liệu qua queue từ pipeline chính — không gọi trực tiếp API SD (blocking I/O) trong pipeline để không vi phạm NFR ≤300ms (§3).
+
+- **Logging:** Dùng `ESP_LOGI`, `ESP_LOGW`, `ESP_LOGE` (từ `esp_log.h`) thay vì `Serial.print()`. Mức log có thể cấu hình qua `idf.py menuconfig` → Component config → Log output. Lưu ý: `ESP_LOG*` là log debug tức thời (UART/console, không lưu trữ lâu dài) — khác với Event Log bền vững trên SD card nói trên.
 
 - **Cấu hình dự án:** Các tham số cấu hình (WiFi SSID/Password, MQTT broker URL, ngưỡng AQI...) phải được định nghĩa trong `Kconfig.projbuild` và truy cập qua macro `CONFIG_*` được sinh tự động — không hardcode trực tiếp trong source code.
 

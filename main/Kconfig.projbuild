@@ -108,6 +108,16 @@ menu "ENV-AQ-01 Project Configuration"
             range 1000 10000
     endmenu
 
+    menu "Storage (SD Card)"
+        config SD_LOG_INTERVAL_MS
+            int "Periodic data log interval (ms)"
+            default 30000
+            range 5000 300000
+            help
+                Chu ky ghi 1 dong CSV vao airdata.csv (StorageHelper.hpp Sec3.1).
+                Nen la boi so cua Sensor read interval.
+    endmenu
+
     choice TEST_MODE
         prompt "Sensor Test Mode"
         default TEST_MODE_NONE

@@ -52,8 +52,8 @@ public:
     // Đọc đầy đủ 1 chu kỳ. Hàm này tự chờ BME680 hoàn tất TPHG cycle
     // (thông qua bme680 lib — sử dụng vTaskDelay đúng bằng measurement
     // duration nội tại của cảm biến, KHÔNG phải logic timing nghiệp vụ).
-    // Cờ *_ready trong out được set theo trạng thái warmup + heater/fan.
-    esp_err_t readAll(AirData &out);
+    // Cờ *_ready trong data được set theo trạng thái warmup + heater/fan.
+    esp_err_t readAll(AirData &data);
 
     // True khi cả 3 cảm biến đều đã hết warmup. Tiện cho DisplayManager
     // hiển thị "WARMING UP" thay vì giá trị 0 lúc khởi động.

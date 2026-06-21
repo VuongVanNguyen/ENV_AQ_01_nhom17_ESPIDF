@@ -51,7 +51,7 @@ enum class MsgKind : uint8_t { DATA, EVENT, OFFLINE_PUSH, OFFLINE_DRAIN };
 
 struct StorageMsg {
     MsgKind   kind;
-    EventType evt;
+    StorageHelper::EventType evt;
     AirData   payload;
 };
 
@@ -471,13 +471,23 @@ esp_err_t StorageHelper::pushOfflineRecord(const AirData &data) {
     if (offline_count_ > Cfg::OFFLINE_QUEUE_MAX_RECORDS) {
         // Hết chỗ: drop record CŨ NHẤT (head++) — §5.2
         uint32_t head = 0;
-        readOfflineHead(head);
-        writeOfflineHead(head + 1);
-        offline_count_--;
-        ESP_LOGW(TAG,
-                 "Offline queue đầy (> %u) — drop record cũ nhất (head=%u)",
-                 static_cast<unsigned>(Cfg::OFFLINE_QUEUE_MAX_RECORDS),
-                 static_cast<unsigned>(head + 1));
+        esp_err_t read_err = readOfflineHead(head);
+        if (read_err != ESP_OK && read_err != ESP_ERR_NOT_FOUND) {
+            ESP_LOGE(TAG, "Đọc %s lỗi (%s) — bỏ qua drop lượt này",
+                     Cfg::SD_OFFLINE_HEAD, esp_err_to_name(read_err));
+        } else {
+            esp_err_t write_err = writeOfflineHead(head + 1);
+            if (write_err != ESP_OK) {
+                ESP_LOGE(TAG, "Ghi %s lỗi — chưa drop được, sẽ thử lại",
+                         Cfg::SD_OFFLINE_HEAD);
+            } else {
+                offline_count_--;
+                ESP_LOGW(TAG,
+                         "Offline queue đầy (> %u) — drop record cũ nhất (head=%u)",
+                         static_cast<unsigned>(Cfg::OFFLINE_QUEUE_MAX_RECORDS),
+                         static_cast<unsigned>(head + 1));
+            }
+        }
     }
 
     return ESP_OK;

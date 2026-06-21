@@ -498,20 +498,6 @@
 #include <cstddef>
 #include <functional>
 
-// EventType (§4.1) — sự kiện rời rạc (edge-triggered) ghi vào
-// Cfg::SD_EVENT_LOG_FILE qua logEvent(). Khai báo public để main.cpp/
-// taskNetwork/cmd_callback (NetworkManager.hpp) gọi được.
-enum class EventType : uint8_t {
-    ALERT_LEVEL_CHANGED  = 0, // alert_level đổi (NONE<->WARNING<->CRITICAL)
-    ALERT_REASON_CHANGED = 1, // alert_reason / alert_flags đổi
-    CALIB_NEEDED_SET     = 2, // calib_needed false->true (kèm calib_reason)
-    CALIB_CONFIRMED      = 3, // confirm_calib OK (DataFusion::confirmRecalibration, §4.4)
-    MQTT_CONNECTED       = 4, // NetworkManager::isConnected() false->true
-    MQTT_DISCONNECTED    = 5, // NetworkManager::isConnected() true->false
-    SYSTEM_BOOT          = 6, // mốc khởi động — phục vụ truy vết
-    SD_LOG_ROTATED       = 7, // airdata.csv vừa xoay vòng (§3.6)
-};
-
 // Callback phát lại 1 record offline — trỏ tới NetworkManager::publishData()
 // (NetworkManager.hpp §1). Truyền vào drainOffline() để StorageHelper KHÔNG
 // #include NetworkManager.hpp (tránh phụ thuộc vòng, §1/§8, giống triết lý
@@ -523,6 +509,19 @@ using PublishFn = std::function<esp_err_t(const AirData &)>;
 // task riêng (§6). Non-copyable như SensorManager/NetworkManager/DataFusion.
 class StorageHelper {
 public:
+    // §4.1 — sự kiện rời rạc (edge-triggered) ghi vào SD_EVENT_LOG_FILE
+    // qua logEvent(). Nested public: caller dùng StorageHelper::EventType::*.
+    enum class EventType : uint8_t {
+        ALERT_LEVEL_CHANGED  = 0, // alert_level đổi (NONE<->WARNING<->CRITICAL)
+        ALERT_REASON_CHANGED = 1, // alert_reason / alert_flags đổi
+        CALIB_NEEDED_SET     = 2, // calib_needed false->true (kèm calib_reason)
+        CALIB_CONFIRMED      = 3, // confirm_calib OK (DataFusion::confirmRecalibration, §4.4)
+        MQTT_CONNECTED       = 4, // NetworkManager::isConnected() false->true
+        MQTT_DISCONNECTED    = 5, // NetworkManager::isConnected() true->false
+        SYSTEM_BOOT          = 6, // mốc khởi động — phục vụ truy vết
+        SD_LOG_ROTATED       = 7, // airdata.csv vừa xoay vòng (§3.6)
+    };
+
     StorageHelper();
     ~StorageHelper();
 

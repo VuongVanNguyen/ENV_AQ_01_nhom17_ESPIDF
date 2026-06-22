@@ -61,6 +61,15 @@ public:
     void process(AirData &data, bool time_synced = false);
     esp_err_t confirmRecalibration(AirData &data, bool time_synced = false);
 
+    // Ghi baseline đang "dirty" xuống NVS — TÁCH khỏi process() (pipeline ≤300ms,
+    // CLAUDE.md §3/§4). process()→initializeBaselineGroup() chỉ chốt baseline vào
+    // RAM + bật cờ dirty (O(1), non-blocking); main.cpp PHẢI gọi hàm này định kỳ ở
+    // task ƯU TIÊN THẤP (ngoài đường tới hạn cảm biến) để thực hiện nvs_commit chậm.
+    // Idempotent: không dirty → trả ESP_OK ngay, không chạm flash.
+    // (confirmRecalibration vẫn ghi NVS ĐỒNG BỘ — nó chạy trong task sự kiện MQTT,
+    //  ngoài pipeline, nên giữ nguyên ngữ nghĩa lỗi đồng bộ.)
+    esp_err_t persistBaselineIfDirty();
+
     AlertLevel getAlertLevel() const;
     AqiCategory lastCategory() const;
     ComfortCategory lastComfortCategory() const;
@@ -82,9 +91,19 @@ private:
 
     int64_t last_calib_ts_;
 
+    // Mốc 30 ngày chờ ghi NVS (deferred): initializeBaselineGroup() đặt giá trị
+    // này + bật baseline_dirty_; persistBaselineIfDirty() đọc ra để nvs_set_i64.
+    int64_t pending_calib_ts_;
+
     // Bitmask 3 nhóm baseline — bit set = nhóm đó đã có baseline hợp lệ.
     // hasBaseline() trả về (baseline_mask_ != 0). Xem §6.5.
     uint8_t baseline_mask_;
+
+    // true = baseline_/baseline_mask_ trong RAM đã đổi nhưng CHƯA ghi NVS.
+    // Bật bởi initializeBaselineGroup() (trong pipeline, không được block);
+    // xoá bởi persistBaselineIfDirty() (low-prio) hoặc confirmRecalibration()
+    // (ghi đồng bộ). Truy cập dưới mutex_.
+    bool baseline_dirty_;
     static constexpr uint8_t BASELINE_BME680_BIT  = 1u << 0; // temperature, humidity, pressure, comfort_index
     static constexpr uint8_t BASELINE_PMS5003_BIT = 1u << 1; // pm25, pm10, aqi
     static constexpr uint8_t BASELINE_MQ135_BIT   = 1u << 2; // co2
@@ -106,6 +125,11 @@ private:
 
     esp_err_t loadBaseline();
     esp_err_t saveBaseline(int64_t timestamp);
+    // Thân ghi NVS thuần (nvs_set_* + commit) — nhận baseline/mask/ts qua tham số,
+    // KHÔNG cập nhật last_calib_ts_ (caller lo). Dùng chung bởi saveBaseline()
+    // (ghi đồng bộ trong confirmRecalibration) và persistBaselineIfDirty() (flush
+    // cờ dirty của baseline-init). Cả hai caller gọi khi ĐANG giữ mutex_.
+    esp_err_t writeBaselineToNvs(const Baseline &bl, uint8_t mask, int64_t timestamp);
 
     void initializeBaselineGroup(uint8_t group_bit, const AirData &data, bool time_synced);
     void computeAqi(AirData &data);
@@ -241,9 +265,12 @@ private:
 //       trong baseline_mask_): mỗi nhóm tự chốt baseline từ MẪU ỔN ĐỊNH ĐẦU
 //       TIÊN của riêng nhóm đó (khi *_ready tương ứng lần đầu = true sau
 //       warmup) — KHÔNG chờ 2 nhóm còn lại, KHÔNG dùng mẫu warmup làm baseline.
-//       Mỗi lần 1 nhóm được chốt: ghi NVS (8 blob hiện có + bl_mask); nếu đây
-//       là nhóm ĐẦU TIÊN (baseline_mask_ trước đó == 0) thì đồng thời ghi
-//       last_calib_timestamp = now — các nhóm chốt sau giữ nguyên timestamp này.
+//       Mỗi lần 1 nhóm được chốt: cập nhật baseline + bl_mask vào RAM và BẬT CỜ
+//       baseline_dirty_ (KHÔNG nvs_commit trong process() — pipeline ≤300ms,
+//       §12); nếu đây là nhóm ĐẦU TIÊN (baseline_mask_ trước đó == 0) thì đồng
+//       thời đặt last_calib_timestamp = now (RAM) — các nhóm chốt sau giữ nguyên
+//       timestamp này. Việc ghi 8 blob + bl_mask + ts xuống flash do
+//       persistBaselineIfDirty() (task ưu tiên thấp ở main.cpp) thực hiện sau.
 //       Backward-compat: NVS cũ (trước khi có bl_mask) nhưng có đủ 8 blob →
 //       coi baseline_mask_ = 0b111 (tất cả nhóm hợp lệ, vì code cũ chỉ ghi khi
 //       cả 3 cảm biến ready).
@@ -382,8 +409,12 @@ private:
 // ----------------------------------------------------------------------------
 //   - NON-BLOCKING: process() thuần tính toán O(1); KHÔNG vTaskDelay, KHÔNG chờ I/O.
 //     Định kỳ điều phối bằng task + queue/esp_timer ở main.cpp (KHÔNG ở đây).
-//   - 300 ms: phần DataFusion phải nhỏ so với ngân sách chu kỳ tổng.
-//   - NVS chỉ ghi khi confirmRecalibration (hiếm) → không ảnh hưởng chu kỳ thường.
+//   - 300 ms: phần DataFusion phải nhỏ so với ngân sách chu kỳ tổng. process()
+//     thuần RAM/O(1): KHÔNG nvs_commit trong pipeline. Baseline-init chỉ chốt RAM
+//     + bật baseline_dirty_; flash do persistBaselineIfDirty() (low-prio) ghi sau.
+//   - NVS ghi ở 2 nơi NGOÀI pipeline: (a) confirmRecalibration (hiếm, task MQTT,
+//     ĐỒNG BỘ để trả lỗi flash); (b) persistBaselineIfDirty (task ưu tiên thấp,
+//     flush cờ dirty của baseline-init) → không nơi nào nằm trên đường ≤300ms.
 //   - ĐỒNG BỘ: nếu confirmRecalibration (chạy trong context callback MQTT/task mạng)
 //     và process() (task xử lý) có thể chạm baseline/NVS đồng thời → BẢO VỆ baseline
 //     dùng cấp/khoá phù hợp (SemaphoreHandle_t mutex, hoặc đẩy lệnh qua queue về

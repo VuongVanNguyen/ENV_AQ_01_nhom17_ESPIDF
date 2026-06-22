@@ -13,7 +13,9 @@ static const char *TAG = "DataFusion";
 DataFusion::DataFusion()
     : baseline_{},
       last_calib_ts_(0),
+      pending_calib_ts_(0),
       baseline_mask_(0),
+      baseline_dirty_(false),
       last_alert_level_(AlertLevel::NONE),
       last_category_(AqiCategory::GOOD), 
       last_comfort_category_(ComfortCategory::COMFORTABLE),
@@ -133,7 +135,15 @@ esp_err_t DataFusion::confirmRecalibration(AirData &data, bool time_synced) {
 
     // Hành động chủ động của người dùng → luôn cập nhật mốc 30 ngày,
     // khác với initializeBaselineGroup (chỉ set mốc ở lần baseline đầu tiên).
+    // GHI NVS ĐỒNG BỘ tại đây là hợp lệ: confirmRecalibration chạy trong task sự
+    // kiện MQTT (ngoài pipeline ≤300ms, không bị TWDT giám sát) — nvs_commit ~100ms
+    // chấp nhận được, đổi lại giữ nguyên ngữ nghĩa trả lỗi flash đồng bộ cho người
+    // dùng. Bản ghi này đã persist TOÀN BỘ baseline_ RAM (gồm cả nhóm baseline-init
+    // còn dirty nếu có) → xoá baseline_dirty_ để persistBaselineIfDirty() khỏi ghi lại.
     esp_err_t err = saveBaseline(now);
+    if (err == ESP_OK) {
+        baseline_dirty_ = false;
+    }
     xSemaphoreGive(mutex_);
 
     if (err == ESP_OK) {
@@ -284,40 +294,53 @@ esp_err_t DataFusion::loadBaseline() {
     return ESP_OK;
 }
 
+// Wrapper ghi từ baseline_ hiện tại — dùng bởi confirmRecalibration (đang giữ
+// mutex_). Sau khi ghi thành công, cập nhật mốc RAM last_calib_ts_.
 esp_err_t DataFusion::saveBaseline(int64_t timestamp) {
+    esp_err_t err = writeBaselineToNvs(baseline_, baseline_mask_, timestamp);
+    if (err == ESP_OK) {
+        last_calib_ts_ = timestamp;
+    }
+    return err;
+}
+
+// Thân ghi NVS thuần — nhận baseline/mask/ts qua tham số, KHÔNG cập nhật member
+// last_calib_ts_ (caller lo). Mọi caller gọi khi ĐANG giữ mutex_ (saveBaseline
+// trong confirmRecalibration, và persistBaselineIfDirty). Một commit cho tất cả.
+esp_err_t DataFusion::writeBaselineToNvs(const Baseline &bl, uint8_t mask, int64_t timestamp) {
     if (!nvs_handle_) {
         return ESP_ERR_INVALID_STATE;
     }
 
-    esp_err_t err = nvs_set_blob(nvs_handle_, Cfg::NVS_KEY_BL_TEMP, &baseline_.temperature, sizeof(baseline_.temperature));
+    esp_err_t err = nvs_set_blob(nvs_handle_, Cfg::NVS_KEY_BL_TEMP, &bl.temperature, sizeof(bl.temperature));
     if (err != ESP_OK) {
         return err;
     }
-    err = nvs_set_blob(nvs_handle_, Cfg::NVS_KEY_BL_HUMI, &baseline_.humidity, sizeof(baseline_.humidity));
+    err = nvs_set_blob(nvs_handle_, Cfg::NVS_KEY_BL_HUMI, &bl.humidity, sizeof(bl.humidity));
     if (err != ESP_OK) {
         return err;
     }
-    err = nvs_set_blob(nvs_handle_, Cfg::NVS_KEY_BL_PM25, &baseline_.pm25, sizeof(baseline_.pm25));
+    err = nvs_set_blob(nvs_handle_, Cfg::NVS_KEY_BL_PM25, &bl.pm25, sizeof(bl.pm25));
     if (err != ESP_OK) {
         return err;
     }
-    err = nvs_set_blob(nvs_handle_, Cfg::NVS_KEY_BL_PM10, &baseline_.pm10, sizeof(baseline_.pm10));
+    err = nvs_set_blob(nvs_handle_, Cfg::NVS_KEY_BL_PM10, &bl.pm10, sizeof(bl.pm10));
     if (err != ESP_OK) {
         return err;
     }
-    err = nvs_set_blob(nvs_handle_, Cfg::NVS_KEY_BL_CO2, &baseline_.co2, sizeof(baseline_.co2));
+    err = nvs_set_blob(nvs_handle_, Cfg::NVS_KEY_BL_CO2, &bl.co2, sizeof(bl.co2));
     if (err != ESP_OK) {
         return err;
     }
-    err = nvs_set_blob(nvs_handle_, Cfg::NVS_KEY_BL_PRESSURE, &baseline_.pressure, sizeof(baseline_.pressure));
+    err = nvs_set_blob(nvs_handle_, Cfg::NVS_KEY_BL_PRESSURE, &bl.pressure, sizeof(bl.pressure));
     if (err != ESP_OK) {
         return err;
     }
-    err = nvs_set_blob(nvs_handle_, Cfg::NVS_KEY_BL_AQI, &baseline_.aqi, sizeof(baseline_.aqi));
+    err = nvs_set_blob(nvs_handle_, Cfg::NVS_KEY_BL_AQI, &bl.aqi, sizeof(bl.aqi));
     if (err != ESP_OK) {
         return err;
     }
-    err = nvs_set_blob(nvs_handle_, Cfg::NVS_KEY_BL_COMFORT, &baseline_.comfort_index, sizeof(baseline_.comfort_index));
+    err = nvs_set_blob(nvs_handle_, Cfg::NVS_KEY_BL_COMFORT, &bl.comfort_index, sizeof(bl.comfort_index));
     if (err != ESP_OK) {
         return err;
     }
@@ -328,7 +351,7 @@ esp_err_t DataFusion::saveBaseline(int64_t timestamp) {
         return err;
     }
 
-    err = nvs_set_u8(nvs_handle_, Cfg::NVS_KEY_BL_MASK, baseline_mask_);
+    err = nvs_set_u8(nvs_handle_, Cfg::NVS_KEY_BL_MASK, mask);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Không thể lưu baseline_mask: %s", esp_err_to_name(err));
         return err;
@@ -340,8 +363,38 @@ esp_err_t DataFusion::saveBaseline(int64_t timestamp) {
         return err;
     }
 
-    last_calib_ts_ = timestamp;
     return ESP_OK;
+}
+
+// persistBaselineIfDirty — gọi từ task ưu tiên thấp (main.cpp). Giữ mutex_ suốt
+// thao tác ghi để SERIALIZE với confirmRecalibration (cũng ghi NVS dưới mutex_):
+// tránh race ghi đè baseline/timestamp cũ hơn lên mới hơn. baseline_dirty_ CHỈ
+// được bật bởi baseline-init lúc boot (confirmRecalibration ghi đồng bộ + xoá
+// dirty, không bật) → steady-state hàm này trả về sớm, KHÔNG ôm mutex lâu, nên
+// không gây trễ confirmRecalibration ngoài cửa sổ boot ngắn. Lỗi flash → giữ
+// dirty để thử lại lượt sau (không "âm thầm" mất baseline — CLAUDE.md §4).
+esp_err_t DataFusion::persistBaselineIfDirty() {
+    if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(100)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    if (!baseline_dirty_) {
+        xSemaphoreGive(mutex_);
+        return ESP_OK;
+    }
+
+    const uint8_t mask = baseline_mask_;
+    const int64_t ts   = pending_calib_ts_;
+    esp_err_t err = writeBaselineToNvs(baseline_, mask, ts);
+    if (err == ESP_OK) {
+        baseline_dirty_ = false;
+        ESP_LOGI(TAG, "Đã flush baseline xuống NVS (mask=0x%02X) tại %lld",
+                 mask, (long long)ts);
+    } else {
+        ESP_LOGW(TAG, "Ghi baseline NVS thất bại (%s) — giữ dirty, thử lại lượt sau",
+                 esp_err_to_name(err));
+    }
+    xSemaphoreGive(mutex_);
+    return err;
 }
 
 void DataFusion::initializeBaselineGroup(uint8_t group_bit, const AirData &data, bool time_synced) {
@@ -379,12 +432,15 @@ void DataFusion::initializeBaselineGroup(uint8_t group_bit, const AirData &data,
     baseline_mask_ |= group_bit;
     setReason(kNoCalibReason);
 
-    const esp_err_t err = saveBaseline(ts);
-    if (err == ESP_OK) {
-        ESP_LOGI(TAG, "Baseline nhóm %s được lưu (mask=0x%02X) tại %lld", group_name, baseline_mask_, (long long)ts);
-    } else {
-        ESP_LOGW(TAG, "Không thể lưu baseline nhóm %s: %s", group_name, esp_err_to_name(err));
-    }
+    // KHÔNG ghi NVS tại đây (chạy trong process() → pipeline ≤300ms, CLAUDE.md
+    // §3/§4): chỉ chốt baseline + mốc vào RAM (đủ cho driftSelfCheck/30 ngày của
+    // chu kỳ kế) và bật cờ dirty. nvs_commit chậm được persistBaselineIfDirty()
+    // ở task ưu tiên thấp thực hiện sau.
+    last_calib_ts_    = ts;
+    pending_calib_ts_ = ts;
+    baseline_dirty_   = true;
+    ESP_LOGI(TAG, "Baseline nhóm %s chốt vào RAM (mask=0x%02X) tại %lld — chờ flush NVS",
+             group_name, baseline_mask_, (long long)ts);
 
     xSemaphoreGive(mutex_);
 }

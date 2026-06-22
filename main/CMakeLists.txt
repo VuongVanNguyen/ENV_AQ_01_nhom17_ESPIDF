@@ -6,9 +6,6 @@ idf_component_register(
         "DisplayManager.cpp"
         "NetworkManager.cpp"
         "StorageHelper.cpp"
-        "test_bme680.cpp"
-        "test_pms5003.cpp"
-        "test_mq135.cpp"
         "main.cpp"
     INCLUDE_DIRS
         "include"

@@ -507,18 +507,31 @@ void DataFusion::driftSelfCheck(AirData &data, bool time_synced) {
     data.calib_needed = false;
     setReason(kNoCalibReason);
 
-    if (baseline_mask_ == 0) {
+    // Snapshot baseline_/baseline_mask_/last_calib_ts_ dưới mutex_ — các trường
+    // này cũng được confirmRecalibration() ghi đồng thời từ task sự kiện MQTT
+    // (DataFusion.hpp §12). Không giữ mutex_ suốt phần tính toán phía dưới để
+    // tránh nghẽn confirmRecalibration/persistBaselineIfDirty (chạy task khác).
+    if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(100)) != pdTRUE) {
+        ESP_LOGW(TAG, "driftSelfCheck: không lấy được mutex_, bỏ qua chu kỳ này");
+        return;
+    }
+    const Baseline local_baseline   = baseline_;
+    const uint8_t  local_mask       = baseline_mask_;
+    const int64_t  local_last_calib = last_calib_ts_;
+    xSemaphoreGive(mutex_);
+
+    if (local_mask == 0) {
         return;
     }
 
     bool drift = false;
     const float threshold = Cfg::DRIFT_THRESHOLD_PCT / 100.0f;
-    const bool bme680_base  = (baseline_mask_ & BASELINE_BME680_BIT)  != 0;
-    const bool pms5003_base = (baseline_mask_ & BASELINE_PMS5003_BIT) != 0;
-    const bool mq135_base   = (baseline_mask_ & BASELINE_MQ135_BIT)   != 0;
+    const bool bme680_base  = (local_mask & BASELINE_BME680_BIT)  != 0;
+    const bool pms5003_base = (local_mask & BASELINE_PMS5003_BIT) != 0;
+    const bool mq135_base   = (local_mask & BASELINE_MQ135_BIT)   != 0;
 
     if (data.bme680_ready && bme680_base && hasFiniteValue(data.temperature)) {
-        const float dev_abs = fabsf(data.temperature - baseline_.temperature);
+        const float dev_abs = fabsf(data.temperature - local_baseline.temperature);
         if (dev_abs > Cfg::DRIFT_TEMP_ABS_C) {
             drift = true;
             setReason("CALIB_DRIFT_TEMP");
@@ -526,31 +539,31 @@ void DataFusion::driftSelfCheck(AirData &data, bool time_synced) {
     }
 
     if (!drift && data.bme680_ready && bme680_base && hasFiniteValue(data.humidity)) {
-        const float dev_abs = fabsf(data.humidity - baseline_.humidity);
+        const float dev_abs = fabsf(data.humidity - local_baseline.humidity);
         if (dev_abs > Cfg::DRIFT_HUMI_ABS_PCT) {
             drift = true;
             setReason("CALIB_DRIFT_HUMI");
         }
     }
 
-    if (!drift && data.pms5003_ready && pms5003_base && hasFiniteValue(data.pm2_5) && baseline_.pm25 != 0.0f) {
-        const float dev = fabsf(static_cast<float>(data.pm2_5) - baseline_.pm25) / fabsf(baseline_.pm25);
+    if (!drift && data.pms5003_ready && pms5003_base && hasFiniteValue(data.pm2_5) && local_baseline.pm25 != 0.0f) {
+        const float dev = fabsf(static_cast<float>(data.pm2_5) - local_baseline.pm25) / fabsf(local_baseline.pm25);
         if (dev > threshold) {
             drift = true;
             setReason("CALIB_DRIFT_PM25");
         }
     }
 
-    if (!drift && data.pms5003_ready && pms5003_base && hasFiniteValue(data.pm10) && baseline_.pm10 != 0.0f) {
-        const float dev = fabsf(static_cast<float>(data.pm10) - baseline_.pm10) / fabsf(baseline_.pm10);
+    if (!drift && data.pms5003_ready && pms5003_base && hasFiniteValue(data.pm10) && local_baseline.pm10 != 0.0f) {
+        const float dev = fabsf(static_cast<float>(data.pm10) - local_baseline.pm10) / fabsf(local_baseline.pm10);
         if (dev > threshold) {
             drift = true;
             setReason("CALIB_DRIFT_PM10");
         }
     }
 
-    if (!drift && data.mq135_ready && mq135_base && hasFiniteValue(data.co2_ppm) && baseline_.co2 != 0.0f) {
-        const float dev = fabsf(data.co2_ppm - baseline_.co2) / fabsf(baseline_.co2);
+    if (!drift && data.mq135_ready && mq135_base && hasFiniteValue(data.co2_ppm) && local_baseline.co2 != 0.0f) {
+        const float dev = fabsf(data.co2_ppm - local_baseline.co2) / fabsf(local_baseline.co2);
         if (dev > threshold) {
             drift = true;
             setReason("CALIB_DRIFT_CO2");
@@ -559,16 +572,16 @@ void DataFusion::driftSelfCheck(AirData &data, bool time_synced) {
 
     const float index_threshold = Cfg::ACCURACY_INDEX_PCT / 100.0f;
 
-    if (!drift && data.pms5003_ready && pms5003_base && hasFiniteValue(data.aqi) && baseline_.aqi != 0.0f) {
-        const float dev = fabsf(data.aqi - baseline_.aqi) / fabsf(baseline_.aqi);
+    if (!drift && data.pms5003_ready && pms5003_base && hasFiniteValue(data.aqi) && local_baseline.aqi != 0.0f) {
+        const float dev = fabsf(data.aqi - local_baseline.aqi) / fabsf(local_baseline.aqi);
         if (dev > index_threshold) {
             drift = true;
             setReason("CALIB_DRIFT_AQI");
         }
     }
 
-    if (!drift && data.bme680_ready && bme680_base && hasFiniteValue(data.comfort_index) && baseline_.comfort_index != 0.0f) {
-        const float dev = fabsf(data.comfort_index - baseline_.comfort_index) / fabsf(baseline_.comfort_index);
+    if (!drift && data.bme680_ready && bme680_base && hasFiniteValue(data.comfort_index) && local_baseline.comfort_index != 0.0f) {
+        const float dev = fabsf(data.comfort_index - local_baseline.comfort_index) / fabsf(local_baseline.comfort_index);
         if (dev > index_threshold) {
             drift = true;
             setReason("CALIB_DRIFT_COMFORT");
@@ -576,7 +589,7 @@ void DataFusion::driftSelfCheck(AirData &data, bool time_synced) {
     }
 
     const int64_t now = getNow(time_synced);
-    if (!drift && last_calib_ts_ > 0 && (now - last_calib_ts_) > Cfg::CALIB_INTERVAL_SEC) {
+    if (!drift && local_last_calib > 0 && (now - local_last_calib) > Cfg::CALIB_INTERVAL_SEC) {
         drift = true;
         setReason("CALIB_OVERDUE_30D");
     }

@@ -152,6 +152,15 @@ private:
 // [XM-5] config.hpp — ĐÃ BỔ SUNG Cfg::CO2_GOOD_MAX / CO2_MODERATE_MAX (§15) để
 //        DisplayManager ánh xạ CO2 → "Tot/TB/Xau" (FIX #6). ĐÃ XONG.
 //
+// [XM-15] main.cpp — showMessage() báo "mất mạng"/"đã có mạng" KHÔNG được gọi
+//        trực tiếp từ taskNetwork (DisplayManager không có mutex nội bộ →
+//        race với update()/tick() của taskDisplay). Giải pháp: hàng đợi
+//        length-1 s_display_notice (taskNetwork ghi xQueueOverwrite, CHỈ
+//        taskDisplay đọc xQueueReceive rồi tự gọi showMessage()) — giữ đúng
+//        nguyên tắc "chỉ 1 task chạm vào s_display".
+//        TRẠNG THÁI: ĐÃ TRIỂN KHAI (main.cpp taskNetwork edge MQTT_CONNECTED/
+//        MQTT_DISCONNECTED + taskDisplay đầu mỗi chu kỳ).
+//
 // [XM-6] (OPTIONAL / LOW PRIORITY — backlog, không phục vụ NFR bắt buộc nào)
 //        setBacklight(bool) — public API "tiết kiệm năng lượng" hiện CHƯA có
 //        caller (dead code). Ý tưởng nếu sau này cần: main.cpp tắt backlight

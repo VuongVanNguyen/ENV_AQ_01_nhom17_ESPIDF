@@ -46,6 +46,14 @@ static SemaphoreHandle_t  s_shared_mtx = nullptr;
 // airDataQueue length-1 — snapshot chỉ-đọc cho taskDisplay/taskNetwork (XM-9).
 static QueueHandle_t      s_airq = nullptr;
 
+// Notice mất/khôi phục mạng — taskNetwork ghi (xQueueOverwrite), CHỈ taskDisplay
+// đọc (xQueueReceive, tiêu thụ) rồi tự gọi s_display.showMessage() (XM-15).
+// DisplayManager không có mutex nội bộ nên KHÔNG được gọi trực tiếp từ
+// taskNetwork (race với update()/tick() của taskDisplay) — hàng đợi length-1
+// này giữ nguyên tắc "chỉ 1 task duy nhất chạm vào s_display".
+enum class DisplayNotice : uint8_t { NET_LOST = 0, NET_RESTORED = 1 };
+static QueueHandle_t      s_display_notice = nullptr;
+
 // Nguồn thời gian thực dùng chung cho main.cpp (đồng nhất DataFusion.hpp §7 /
 // StorageHelper.hpp §7): Unix time nếu SNTP đã sync, ngược lại giây-từ-boot.
 static int64_t nowUnixOrUptime() {
@@ -155,13 +163,28 @@ static void taskDisplay(void *) {
     for (;;) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
+        // XM-15: notice mạng (taskNetwork → đây) ưu tiên trong chu kỳ này —
+        // tiêu thụ (Receive, không Peek) để chỉ hiển thị đúng 1 lần mỗi edge.
+        // showMessage() tự set overlay Cfg::LCD_OVERLAY_MIN_MS nên update()
+        // các chu kỳ kế tiếp tự động bỏ qua cho tới khi overlay hết hạn —
+        // không cần thêm cờ gì ở taskDisplay. Non-blocking (timeout 0) nên
+        // không vi phạm WDT/non-blocking rule (CLAUDE.md §4).
+        DisplayNotice notice;
+        if (xQueueReceive(s_display_notice, &notice, 0) == pdTRUE) {
+            if (notice == DisplayNotice::NET_LOST) {
+                s_display.showMessage("NETWORK LOST", "Saving to SD");
+            } else {
+                s_display.showMessage("NETWORK OK", "Syncing...");
+            }
+        }
+
         // Snapshot chỉ-đọc (XM-9). Trước khi taskSensor có chu kỳ đầu tiên,
         // queue rỗng → snap giữ AirData{} mặc định (mọi *_ready=false) →
         // DisplayManager tự hiển thị WARMING UP, đúng hành vi mong muốn.
         AirData snap{};
         xQueuePeek(s_airq, &snap, 0);
 
-        s_display.update(snap);   // XM-1: vẽ trang hiện tại
+        s_display.update(snap);   // XM-1: vẽ trang hiện tại (no-op nếu overlay đang giữ)
         s_display.tick();         // XM-1: rotate trang / blink CALIB_ALERT
 
         esp_task_wdt_reset();
@@ -191,8 +214,12 @@ static void taskNetwork(void *) {
             if (conn) {
                 s_storage.logEvent(StorageHelper::EventType::MQTT_CONNECTED, snap);
                 s_storage.drainOffline([](const AirData &d) { return s_network.publishData(d); });
+                DisplayNotice notice = DisplayNotice::NET_RESTORED;     // XM-15
+                xQueueOverwrite(s_display_notice, &notice);
             } else {
                 s_storage.logEvent(StorageHelper::EventType::MQTT_DISCONNECTED, snap);
+                DisplayNotice notice = DisplayNotice::NET_LOST;         // XM-15
+                xQueueOverwrite(s_display_notice, &notice);
             }
             prev_connected = conn;
         }
@@ -270,6 +297,8 @@ extern "C" void app_main() {
     assert(s_shared_mtx != nullptr);
     s_airq = xQueueCreate(1, sizeof(AirData));
     assert(s_airq != nullptr);
+    s_display_notice = xQueueCreate(1, sizeof(DisplayNotice));  // XM-15
+    assert(s_display_notice != nullptr);
 
     // ---- D.3: SensorManager — gọi i2cdev_init() lần đầu; PHẢI chạy TRƯỚC
     //      DisplayManager::init() (XM-4, cùng Cfg::I2C_PORT). Cốt lõi của hệ

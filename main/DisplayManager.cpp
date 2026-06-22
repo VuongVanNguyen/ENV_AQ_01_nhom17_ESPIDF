@@ -102,7 +102,7 @@ esp_err_t DisplayManager::init() {
     initialized_ = true;
     
     // Màn hình chào Booting
-    showMessage("   ENV-AQ-01   ", "  Starting...  ");
+    showMessage("ENV-AQ-01", "Starting...");
     
     ESP_LOGI(TAG, "LCD khởi tạo thành công.");
     return ESP_OK;
@@ -180,7 +180,7 @@ void DisplayManager::renderToShadow(const AirData &data) {
         case ScreenPage::MAIN_AQI_CI:
             {
                 if (data.pms5003_ready) {
-                    const char* aqi_labels[] = {"Tot", "TB", "Kem", "Xau", "R.Xau", "Nguy"};
+                    const char* aqi_labels[] = {"Good", "Fair", "Poor", "Bad", "VeryBad", "Hazard"};
                     uint8_t aqi_cat = (data.aqi_category <= 5) ? data.aqi_category : 5;
                     snprintf(shadow_[0], 17, "AQI:%03d %s", (int)lroundf(data.aqi), aqi_labels[aqi_cat]);
                 } else {
@@ -190,7 +190,7 @@ void DisplayManager::renderToShadow(const AirData &data) {
                 if (data.bme680_ready) {
                     // Nhãn CI: data.comfort_category đã được DataFusion phân loại
                     // theo thang Thom DI 6 mức (config.hpp §14) — Display chỉ map số→nhãn.
-                    const char* ci_labels[] = {"Tot", "Am", "Nong", "Kho", "Nguy", "C.Cuu"};
+                    const char* ci_labels[] = {"Good", "S.Hot", "Hot", "V.Hot", "Stress", "Danger"};
                     uint8_t ci_cat = (data.comfort_category <= 5) ? data.comfort_category : 5;
                     snprintf(shadow_[1], 17, "CI:%4.1f %s", data.comfort_index, ci_labels[ci_cat]);
                 } else {
@@ -203,7 +203,7 @@ void DisplayManager::renderToShadow(const AirData &data) {
             {
                 if (data.mq135_ready) {
                     // Phân loại CO2 theo Cfg::CO2_GOOD_MAX/CO2_MODERATE_MAX (config.hpp §15)
-                    const char* co2_labels[] = {"Tot", "TB", "Xau"};
+                    const char* co2_labels[] = {"OK", "Mod", "Bad"};
                     uint8_t co2_cat;
                     if (data.co2_ppm <= Cfg::CO2_GOOD_MAX) {
                         co2_cat = 0;

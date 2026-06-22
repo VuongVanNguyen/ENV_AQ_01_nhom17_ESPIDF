@@ -6,6 +6,11 @@ CONFIG_COMPILER_CXX_RTTI=n
 CONFIG_FREERTOS_HZ=1000
 CONFIG_FREERTOS_UNICORE=n
 
+# ---- Task Watchdog ----
+# 10s thay vì default 5s — chừa biên an toàn cho LCD_MAX_INTERVAL_MS=5000ms
+# (config.hpp §6) và storageTask (fsync/rename SD có thể block hàng trăm ms).
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+
 # ---- Log level ----
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 CONFIG_LOG_DEFAULT_LEVEL=3
@@ -30,6 +35,17 @@ CONFIG_ADC_ONESHOT_CTRL_FUNC_IN_IRAM=y
 # ---- SD / FAT ----
 CONFIG_FAT_USE_FASTSEEK=y
 CONFIG_SDMMC_IO_POWER_1800MV=n
+
+# ---- Partition table ----
+# Firmware (esp-idf-lib drivers + MQTT + FAT/SD + STL) vượt 1MB factory mặc định
+# -> dùng partition "single app large" (factory 1500K) để còn biên tăng trưởng.
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+
+# ---- Flash size ----
+# Board thực tế dùng module 4MB Flash (xem CLAUDE.md §1); 2MB không đủ chứa
+# factory 1500K + nvs + phy_init một cách an toàn cho các board 4MB thực tế.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
 
 # ---- Project ----
 CONFIG_WIFI_SSID="YourSSID"

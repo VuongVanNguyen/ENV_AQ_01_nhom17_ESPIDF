@@ -145,6 +145,11 @@ esp_err_t NetworkManager::initMqtt() {
     esp_mqtt_client_config_t cfg = {};
     cfg.broker.address.uri    = Cfg::MQTT_BROKER_URL;
     cfg.credentials.client_id = mqtt_client_id_;  // trỏ vào member — vòng đời hợp lệ
+    // ThingsBoard (và các dashboard cloud khác) xác thực bằng username = access token,
+    // không dùng password. Để trống nếu broker không yêu cầu auth (vd. broker.hivemq.com).
+    if (Cfg::MQTT_ACCESS_TOKEN[0] != '\0') {
+        cfg.credentials.username = Cfg::MQTT_ACCESS_TOKEN;
+    }
     // Auto-reconnect mặc định 10s — đủ cho NFR cảnh báo <3s sau khi kết nối lại
     cfg.network.disable_auto_reconnect = false;
 
@@ -270,13 +275,17 @@ void NetworkManager::mqttEventHandler(void *arg, esp_event_base_t,
     auto *self = static_cast<NetworkManager *>(arg);
     auto *evt  = static_cast<esp_mqtt_event_handle_t>(event_data);
     switch (static_cast<esp_mqtt_event_id_t>(id)) {
-        case MQTT_EVENT_CONNECTED:
+        case MQTT_EVENT_CONNECTED: {
             self->mqtt_connected_.store(true);
             ESP_LOGI(TAG, "MQTT kết nối thành công (client_id='%s')", self->mqtt_client_id_);
             // Subscribe topic lệnh mỗi lần reconnect — broker không giữ subscription sau disconnect
-            esp_mqtt_client_subscribe(self->mqtt_, Cfg::MQTT_TOPIC_CMD, 1);
-            ESP_LOGI(TAG, "Đã subscribe topic lệnh '%s'", Cfg::MQTT_TOPIC_CMD);
+            // ThingsBoard RPC: requestId thay đổi mỗi lần gọi → subscribe theo wildcard "<prefix>/+"
+            char cmd_sub_topic[64];
+            snprintf(cmd_sub_topic, sizeof(cmd_sub_topic), "%s/+", Cfg::MQTT_TOPIC_CMD);
+            esp_mqtt_client_subscribe(self->mqtt_, cmd_sub_topic, 1);
+            ESP_LOGI(TAG, "Đã subscribe topic lệnh '%s'", cmd_sub_topic);
             break;
+        }
 
         case MQTT_EVENT_DISCONNECTED:
             self->mqtt_connected_.store(false);
@@ -286,10 +295,10 @@ void NetworkManager::mqttEventHandler(void *arg, esp_event_base_t,
         case MQTT_EVENT_DATA: {
             if (!evt || !evt->topic || !evt->data) break;
 
-            // So sánh topic (không null-terminated — phải dùng topic_len)
-            size_t cmd_topic_len = std::strlen(Cfg::MQTT_TOPIC_CMD);
-            if (static_cast<size_t>(evt->topic_len) != cmd_topic_len ||
-                std::strncmp(evt->topic, Cfg::MQTT_TOPIC_CMD, cmd_topic_len) != 0) {
+            size_t cmd_prefix_len = std::strlen(Cfg::MQTT_TOPIC_CMD);
+            if (static_cast<size_t>(evt->topic_len) <= cmd_prefix_len ||
+                std::strncmp(evt->topic, Cfg::MQTT_TOPIC_CMD, cmd_prefix_len) != 0 ||
+                evt->topic[cmd_prefix_len] != '/') {
                 break;
             }
 
@@ -305,9 +314,10 @@ void NetworkManager::mqttEventHandler(void *arg, esp_event_base_t,
                 break;
             }
 
-            cJSON *cmd_item = cJSON_GetObjectItem(root, "cmd");
+            // ThingsBoard RPC payload: {"method":"confirm_calib","params":{}}
+            cJSON *cmd_item = cJSON_GetObjectItem(root, "method");
             if (cJSON_IsString(cmd_item)) {
-                ESP_LOGI(TAG, "Nhận lệnh từ broker: '%s'", cmd_item->valuestring);
+                ESP_LOGI(TAG, "Nhận lệnh RPC từ ThingsBoard: '%s'", cmd_item->valuestring);
                 self->dispatchCommand(cmd_item->valuestring);
             }
             cJSON_Delete(root);

@@ -34,11 +34,19 @@ menu "ENV-AQ-01 Project Configuration"
                 Topic để publish cảnh báo (calib_alert, threshold breach).
 
         config MQTT_TOPIC_CMD
-            string "MQTT Command Topic (subscribe)"
-            default "env/aq01/cmd"
+            string "MQTT Command Topic prefix (subscribe, RPC)"
+            default "v1/devices/me/rpc/request"
             help
-                Topic broker gửi lệnh xuống thiết bị.
-                Payload JSON hỗ trợ: {"cmd":"confirm_calib"}, {"cmd":"reboot"}.
+                Tiền tố topic RPC của ThingsBoard — broker publish lệnh vào
+                "<prefix>/<requestId>". Code tự nối "/+" khi subscribe.
+                Payload JSON theo chuẩn ThingsBoard: {"method":"confirm_calib","params":{}}.
+
+        config MQTT_ACCESS_TOKEN
+            string "MQTT Username / Access Token"
+            default ""
+            help
+                Dùng làm username khi kết nối MQTT (ví dụ ThingsBoard Access Token).
+                Để trống nếu broker không yêu cầu auth (ví dụ broker.hivemq.com).
     endmenu
 
     menu "AQI Category Thresholds (chi so AQI 0-500)"

@@ -43,6 +43,19 @@ struct AirData {
     uint8_t alert_level;
     char alert_reason[24];
 
+    //   alert_level_changed_us: mốc esp_timer_get_time() (µs) tại chu kỳ
+    //   alert_level THỰC SỰ đổi mức (DataFusion::computeAlertLevel ghi —
+    //   so với last_alert_level_ TRƯỚC khi overwrite). Đây là "t0" để đo NFR
+    //   đẩy cảnh báo ≤ Cfg::ALERT_MAX_LATENCY_MS (CLAUDE.md §3). Không đổi
+    //   mức → giữ nguyên mốc của lần đổi gần nhất.
+    int64_t alert_level_changed_us;
+
+    //   alert_latency_ms: do main.cpp (taskNetwork) tính = (esp_timer_get_time()
+    //   - alert_level_changed_us)/1000 NGAY TRƯỚC khi gọi NetworkManager::
+    //   publishAlert() — NetworkManager CHỈ ĐỌC trường này để nhúng vào JSON
+    //   publishAlert, không tự tính toán (giữ đúng vai trò "đọc, publish JSON").
+    uint32_t alert_latency_ms;
+
     //   alert_flags: bitmask BỔ SUNG cho alert_reason — mỗi bit set ĐỘC LẬP
     //   khi điều kiện tương ứng đang active trong chu kỳ, cho phép dashboard
     //   phát hiện NHIỀU điều kiện CRITICAL/WARNING xảy ra ĐỒNG THỜI (mà
@@ -85,4 +98,6 @@ struct AirData {
     // ---- Metadata ----
     int64_t timestamp;      // Unix time khi lấy mẫu
     bool data_valid;        // false nếu cycle readAll() trả lỗi cứng
+    uint16_t cycle_time_ms; // Thời gian taskSensor xử lý 1 chu kỳ (đọc+filter+fusion),
+                            // để bên ngoài (dashboard/CSV) giám sát NFR ≤300ms (CLAUDE.md §3)
 };

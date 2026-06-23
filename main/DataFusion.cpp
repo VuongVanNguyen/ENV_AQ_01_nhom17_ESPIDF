@@ -17,7 +17,8 @@ DataFusion::DataFusion()
       baseline_mask_(0),
       baseline_dirty_(false),
       last_alert_level_(AlertLevel::NONE),
-      last_category_(AqiCategory::GOOD), 
+      alert_level_changed_us_(0),
+      last_category_(AqiCategory::GOOD),
       last_comfort_category_(ComfortCategory::COMFORTABLE),
       nvs_handle_(0), mutex_(nullptr) 
 {
@@ -63,6 +64,9 @@ esp_err_t DataFusion::init() {
 void DataFusion::process(AirData &data, bool time_synced) {
     if (!data.data_valid) {
         ESP_LOGW(TAG, "Dữ liệu không hợp lệ, không kết hợp dữ liệu");
+        if (last_alert_level_ != AlertLevel::NONE) {
+            alert_level_changed_us_ = esp_timer_get_time();
+        }
         last_alert_level_ = AlertLevel::NONE;
         setSafeSentinel(data);
         return;
@@ -187,6 +191,7 @@ void DataFusion::setSafeSentinel(AirData &data) const {
     data.last_calib_timestamp = last_calib_ts_;
     data.alert_level = static_cast<uint8_t>(AlertLevel::NONE);
     data.alert_flags = 0;
+    data.alert_level_changed_us = alert_level_changed_us_;
     std::strncpy(data.alert_reason, kNoAlertReason, sizeof(data.alert_reason) - 1);
     data.alert_reason[sizeof(data.alert_reason) - 1] = '\0';
     std::strncpy(data.calib_reason, kNoCalibReason, sizeof(data.calib_reason) - 1);
@@ -648,6 +653,11 @@ void DataFusion::computeAlertLevel(AirData &data) {
             flags |= FLAG_CALIB_NEEDED;
         }
     }
+
+    if (level != last_alert_level_) {
+        alert_level_changed_us_ = esp_timer_get_time();
+    }
+    data.alert_level_changed_us = alert_level_changed_us_;
 
     last_alert_level_ = level;
     data.alert_level = static_cast<uint8_t>(level);

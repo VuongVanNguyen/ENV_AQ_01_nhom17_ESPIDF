@@ -224,6 +224,8 @@
 //         MQTT_DISCONNECTED     // mất kết nối broker (↓)
 //         SYSTEM_BOOT           // (khuyến nghị) mốc khởi động — phục vụ truy vết
 //         SD_LOG_ROTATED        // (nếu bật §3.6) — truy vết file
+//         ALERT_LATENCY_EXCEEDED // alert_latency_ms (AirData) > Cfg::ALERT_MAX_LATENCY_MS
+//                               //   (CLAUDE.md §3) — taskNetwork đo & ghi (xem §4.3)
 //
 //   4.2 HEADER events.csv (ghi 1 lần khi tạo mới):
 //         timestamp,time_valid,event,alert_level,alert_reason,alert_flags,
@@ -520,6 +522,9 @@ public:
         MQTT_DISCONNECTED    = 5, // NetworkManager::isConnected() true->false
         SYSTEM_BOOT          = 6, // mốc khởi động — phục vụ truy vết
         SD_LOG_ROTATED       = 7, // airdata.csv vừa xoay vòng (§3.6)
+        ALERT_LATENCY_EXCEEDED = 8, // alert_latency_ms > Cfg::ALERT_MAX_LATENCY_MS
+                                    // (taskNetwork/main.cpp đo, snapshot.alert_reason
+                                    // cho biết alert nào bị trễ — CLAUDE.md §3)
     };
 
     StorageHelper();
@@ -578,7 +583,7 @@ private:
                                           // — gating nhịp ghi theo SD_LOG_INTERVAL_MS (§3.1)
 
     // ---- Thân task (§6) ----
-    static void storageTask(void *arg);
+    static void taskStorage(void *arg);
     void taskLoop();
 
     // ---- Mount SD qua SPI (§2) ----

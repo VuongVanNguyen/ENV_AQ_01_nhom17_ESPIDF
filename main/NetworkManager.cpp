@@ -361,6 +361,9 @@ size_t NetworkManager::buildJson(const AirData &data, char *out, size_t out_sz) 
     // --- Metadata ---
     cJSON_AddNumberToObject(root, "ts",      (double)data.timestamp);
     cJSON_AddBoolToObject  (root, "valid",   data.data_valid);
+    // cycle_ms: thời gian taskSensor xử lý chu kỳ này — cho dashboard giám sát
+    // NFR pipeline ≤300ms (CLAUDE.md §3) mà không cần đọc log debug UART.
+    cJSON_AddNumberToObject(root, "cycle_ms", data.cycle_time_ms);
 
     // --- BME680 ---
     cJSON_AddNumberToObject(root, "temp",    data.temperature);
@@ -399,6 +402,7 @@ size_t NetworkManager::buildJson(const AirData &data, char *out, size_t out_sz) 
     cJSON_AddNumberToObject(root, "alert_level",  data.alert_level);
     cJSON_AddStringToObject(root, "alert_reason", data.alert_reason);
     cJSON_AddNumberToObject(root, "alert_flags",  data.alert_flags);
+    cJSON_AddNumberToObject(root, "alert_latency_ms", data.alert_latency_ms);
 
     // --- Hiệu chuẩn (Drift Self-Check) ---
     // calib_reason ĐỘC LẬP với alert_reason — luôn cụ thể (CALIB_DRIFT_TEMP/

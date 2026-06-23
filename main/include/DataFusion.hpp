@@ -109,6 +109,14 @@ private:
     static constexpr uint8_t BASELINE_MQ135_BIT   = 1u << 2; // co2
 
     AlertLevel last_alert_level_;
+
+    // Mốc esp_timer_get_time() (µs) của lần alert_level THỰC SỰ đổi mức gần
+    // nhất — sở hữu bởi DataFusion (như last_calib_ts_), KHÔNG dựa vào AirData
+    // tự giữ giá trị giữa các chu kỳ: taskSensor (main.cpp) tạo "AirData local{}"
+    // MỚI mỗi chu kỳ (zero-init), nên field trong data sẽ mất giá trị nếu không
+    // được gán lại TỪ ĐÂY mỗi lần process() chạy (CLAUDE.md §3 ALERT_MAX_LATENCY_MS).
+    int64_t alert_level_changed_us_;
+
     AqiCategory last_category_;
     ComfortCategory last_comfort_category_;
     char last_calib_reason_[32];

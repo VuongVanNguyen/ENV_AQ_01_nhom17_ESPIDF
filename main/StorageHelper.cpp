@@ -38,7 +38,7 @@ static constexpr const char *kDataHeader =
     "pm1_0,pm2_5,pm10,co2_ppm,aqi,aqi_category,"
     "comfort_index,comfort_category,alert_level,alert_reason,"
     "alert_flags,calib_needed,calib_reason,"
-    "bme680_ready,pms5003_ready,mq135_ready,data_valid\n";
+    "bme680_ready,pms5003_ready,mq135_ready,data_valid,cycle_time_ms\n";
 
 static constexpr const char *kEventHeader =
     "timestamp,time_valid,event,alert_level,alert_reason,alert_flags,"
@@ -149,7 +149,7 @@ esp_err_t StorageHelper::init() {
                  static_cast<unsigned>(offline_count_));
     }
 
-    BaseType_t ok = xTaskCreate(storageTask, "storage",
+    BaseType_t ok = xTaskCreate(taskStorage, "storage",
                                  Cfg::TASK_STACK_STORAGE_WORDS, this,
                                  Cfg::TASK_PRIO_STORAGE, &storage_task_);
     if (ok != pdPASS) {
@@ -282,14 +282,14 @@ esp_err_t StorageHelper::writeDataRow(const AirData &data) {
     //   pm1_0,pm2_5,pm10,co2_ppm,aqi,aqi_category,
     //   comfort_index,comfort_category,alert_level,alert_reason,
     //   alert_flags,calib_needed,calib_reason,
-    //   bme680_ready,pms5003_ready,mq135_ready,data_valid
+    //   bme680_ready,pms5003_ready,mq135_ready,data_valid,cycle_time_ms
     int n = fprintf(
         f,
         "%lld,%d,%s,%s,%s,"
         "%u,%u,%u,%s,%s,%u,"
         "%s,%u,%u,%s,"
         "0x%04X,%d,%s,"
-        "%d,%d,%d,%d\n",
+        "%d,%d,%d,%d,%u\n",
         static_cast<long long>(data.timestamp), timeValidOf(data.timestamp),
         t_buf, h_buf, p_buf, static_cast<unsigned>(data.pm1_0),
         static_cast<unsigned>(data.pm2_5), static_cast<unsigned>(data.pm10),
@@ -299,7 +299,7 @@ esp_err_t StorageHelper::writeDataRow(const AirData &data) {
         static_cast<unsigned>(data.alert_flags), data.calib_needed ? 1 : 0,
         calib_reason_esc, data.bme680_ready ? 1 : 0,
         data.pms5003_ready ? 1 : 0, data.mq135_ready ? 1 : 0,
-        data.data_valid ? 1 : 0);
+        data.data_valid ? 1 : 0, static_cast<unsigned>(data.cycle_time_ms));
 
     if (n < 0) {
         ESP_LOGE(TAG, "fprintf lỗi khi ghi %s", Cfg::SD_LOG_FILE);
@@ -414,14 +414,15 @@ esp_err_t StorageHelper::writeEventRow(EventType type,
 
 const char *StorageHelper::eventTypeName(EventType type) {
     switch (type) {
-        case EventType::ALERT_LEVEL_CHANGED:  return "ALERT_LEVEL_CHANGED";
-        case EventType::ALERT_REASON_CHANGED: return "ALERT_REASON_CHANGED";
-        case EventType::CALIB_NEEDED_SET:     return "CALIB_NEEDED_SET";
-        case EventType::CALIB_CONFIRMED:      return "CALIB_CONFIRMED";
-        case EventType::MQTT_CONNECTED:       return "MQTT_CONNECTED";
-        case EventType::MQTT_DISCONNECTED:    return "MQTT_DISCONNECTED";
-        case EventType::SYSTEM_BOOT:          return "SYSTEM_BOOT";
-        case EventType::SD_LOG_ROTATED:       return "SD_LOG_ROTATED";
+        case EventType::ALERT_LEVEL_CHANGED:    return "ALERT_LEVEL_CHANGED";
+        case EventType::ALERT_REASON_CHANGED:   return "ALERT_REASON_CHANGED";
+        case EventType::CALIB_NEEDED_SET:       return "CALIB_NEEDED_SET";
+        case EventType::CALIB_CONFIRMED:        return "CALIB_CONFIRMED";
+        case EventType::MQTT_CONNECTED:         return "MQTT_CONNECTED";
+        case EventType::MQTT_DISCONNECTED:      return "MQTT_DISCONNECTED";
+        case EventType::SYSTEM_BOOT:            return "SYSTEM_BOOT";
+        case EventType::SD_LOG_ROTATED:         return "SD_LOG_ROTATED";
+        case EventType::ALERT_LATENCY_EXCEEDED: return "ALERT_LATENCY_EXCEEDED";
     }
     return "UNKNOWN";
 }
@@ -805,7 +806,7 @@ size_t StorageHelper::offlineCount() const { return offline_count_; }
 // ============================================================
 // §6 — storageTask: NƠI DUY NHẤT chạm fopen/fwrite/fsync
 // ============================================================
-void StorageHelper::storageTask(void *arg) {
+void StorageHelper::taskStorage(void *arg) {
     static_cast<StorageHelper *>(arg)->taskLoop();
 }
 

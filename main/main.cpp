@@ -126,6 +126,14 @@ static void taskSensor(void *) {
         s_shared = local;
         xSemaphoreGive(s_shared_mtx);
 
+        const int64_t elapsed_ms = (esp_timer_get_time() - t0) / 1000;
+        local.cycle_time_ms = static_cast<uint16_t>(
+            std::min<int64_t>(elapsed_ms, UINT16_MAX));
+        if (elapsed_ms > static_cast<int64_t>(Cfg::MAX_CYCLE_TIME_MS)) {
+            ESP_LOGW(TAG, "Chu kỳ pipeline vượt ngân sách: %lldms > %ums",
+                     (long long)elapsed_ms, (unsigned)Cfg::MAX_CYCLE_TIME_MS);
+        }
+
         // (5) Publish snapshot cho taskDisplay/taskNetwork — SAU khi unlock (XM-9).
         xQueueOverwrite(s_airq, &local);
 
@@ -142,12 +150,6 @@ static void taskSensor(void *) {
         //     Cfg::SD_LOG_INTERVAL_MS (StorageHelper.cpp writeDataRow §3.1),
         //     pipeline chỉ enqueue O(1), KHÔNG ghi SD mỗi 300ms.
         s_storage.logData(local);
-
-        const int64_t elapsed_ms = (esp_timer_get_time() - t0) / 1000;
-        if (elapsed_ms > static_cast<int64_t>(Cfg::MAX_CYCLE_TIME_MS)) {
-            ESP_LOGW(TAG, "Chu kỳ pipeline vượt ngân sách: %lldms > %ums",
-                     (long long)elapsed_ms, (unsigned)Cfg::MAX_CYCLE_TIME_MS);
-        }
 
         // (9) Feed watchdog.
         esp_task_wdt_reset();
@@ -237,6 +239,14 @@ static void taskNetwork(void *) {
         // (c) Debounce publishAlert theo alert_level — đáp ứng NFR ≤ ALERT_MAX_LATENCY_MS (XM-11).
         const auto level = static_cast<DataFusion::AlertLevel>(snap.alert_level);
         if (level != last_published_level) {
+            snap.alert_latency_ms = static_cast<uint32_t>(
+                std::max<int64_t>(0, esp_timer_get_time() - snap.alert_level_changed_us) / 1000);
+            if (snap.alert_latency_ms > Cfg::ALERT_MAX_LATENCY_MS) {
+                ESP_LOGW(TAG, "Vi phạm NFR alert latency: %u ms > %u ms (alert_reason=%s)",
+                         (unsigned)snap.alert_latency_ms, (unsigned)Cfg::ALERT_MAX_LATENCY_MS,
+                         snap.alert_reason);
+                s_storage.logEvent(StorageHelper::EventType::ALERT_LATENCY_EXCEEDED, snap);
+            }
             s_network.publishAlert(snap);
             s_storage.logEvent(StorageHelper::EventType::ALERT_LEVEL_CHANGED, snap);
             last_published_level = level;
@@ -289,7 +299,7 @@ extern "C" void app_main() {
                                      (reset_reason == ESP_RST_INT_WDT) ||
                                      (reset_reason == ESP_RST_WDT);
     if (recovered_from_wdt) {
-        ESP_LOGE(TAG, "Recovered from WDT reset (reason=%d)", (int)reset_reason);
+        ESP_LOGE(TAG, "Hồi phục từ WDT reset (lí do=%d)", (int)reset_reason);
     }
 
     // ---- D.2: hạ tầng đồng bộ TRƯỚC khi tạo task ----
@@ -385,13 +395,17 @@ extern "C" void app_main() {
                                                     Cfg::LCD_MIN_INTERVAL_MS,
                                                     Cfg::LCD_MAX_INTERVAL_MS);
 
+    const uint32_t sensor_period_ms = std::clamp(Cfg::SENSOR_READ_INTERVAL_MS,
+                                                  Cfg::SENSOR_MIN_INTERVAL_MS,
+                                                  Cfg::SENSOR_MAX_INTERVAL_MS);
+
     esp_timer_handle_t sensor_timer = nullptr, display_timer = nullptr, network_timer = nullptr;
     ESP_ERROR_CHECK(startPeriodicNotifier(sensor_timer, "sensor_tick", h_sensor,
-                                           Cfg::SENSOR_READ_INTERVAL_MS));
+                                           sensor_period_ms));
     ESP_ERROR_CHECK(startPeriodicNotifier(display_timer, "display_tick", h_display,
                                            display_period_ms));
     ESP_ERROR_CHECK(startPeriodicNotifier(network_timer, "network_tick", h_network,
-                                           Cfg::SENSOR_READ_INTERVAL_MS));
+                                           sensor_period_ms));
 
     // ---- H.5: mốc khởi động — phục vụ truy vết (kèm ESP_LOGE phía trên nếu
     //      vừa hồi phục từ WDT reset) ----
@@ -402,6 +416,6 @@ extern "C" void app_main() {
     ESP_LOGI(TAG,
              "Production mode khởi tạo hoàn tất — chu kỳ pipeline=%ums "
              "LCD=%ums network=%ums",
-             (unsigned)Cfg::SENSOR_READ_INTERVAL_MS, (unsigned)display_period_ms,
-             (unsigned)Cfg::SENSOR_READ_INTERVAL_MS);
+             (unsigned)sensor_period_ms, (unsigned)display_period_ms,
+             (unsigned)sensor_period_ms);
 }

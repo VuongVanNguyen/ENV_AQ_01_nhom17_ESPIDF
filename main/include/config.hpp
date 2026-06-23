@@ -171,6 +171,14 @@ inline constexpr uint32_t ALERT_MAX_LATENCY_MS       = 3'000;  // Cảnh báo ph
 inline constexpr uint32_t LCD_MIN_INTERVAL_MS        = 2'000;  // Giới hạn dưới cập nhật LCD
 inline constexpr uint32_t LCD_MAX_INTERVAL_MS        = 5'000;  // Giới hạn trên cập nhật LCD
 
+// Cận trên an toàn cho SENSOR_READ_INTERVAL_MS — taskSensor/taskNetwork chỉ
+// được notify mỗi interval này, nên alert/MQTT publish tối đa trễ
+// (interval + 1 chu kỳ xử lý) sau khi điều kiện xảy ra. Đảm bảo tổng đó
+// không vượt ALERT_MAX_LATENCY_MS dù sdkconfig bị cấu hình giá trị lớn
+// (Kconfig range chỉ validate ở menuconfig UI, không enforce lúc build).
+inline constexpr uint32_t SENSOR_MIN_INTERVAL_MS     = 500;
+inline constexpr uint32_t SENSOR_MAX_INTERVAL_MS     = ALERT_MAX_LATENCY_MS - MAX_CYCLE_TIME_MS;
+
 // Thời lượng tối thiểu giữ overlay message (DisplayManager::showMessage)
 // trước khi update() được phép vẽ lại frame trạng thái bình thường —
 // đảm bảo người dùng kịp đọc thông báo tức thời (vd "Mất mạng").

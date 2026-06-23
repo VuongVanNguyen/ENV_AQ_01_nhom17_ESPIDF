@@ -158,28 +158,8 @@ esp_err_t DataFusion::confirmRecalibration(AirData &data, bool time_synced) {
     return err;
 }
 
-DataFusion::AlertLevel DataFusion::getAlertLevel() const {
-    return last_alert_level_;
-}
-
-DataFusion::AqiCategory DataFusion::lastCategory() const {
-    return last_category_;
-}
-
-DataFusion::ComfortCategory DataFusion::lastComfortCategory() const {
-    return last_comfort_category_;
-}
-
 bool DataFusion::hasBaseline() const {
     return baseline_mask_ != 0;
-}
-
-int64_t DataFusion::lastCalibrationTimestamp() const { //Có thể xóa đi ở cuối dự án nếu không dùng
-    return last_calib_ts_;
-}
-
-const char *DataFusion::calibReason() const {
-    return last_calib_reason_;
 }
 
 void DataFusion::setSafeSentinel(AirData &data) const {

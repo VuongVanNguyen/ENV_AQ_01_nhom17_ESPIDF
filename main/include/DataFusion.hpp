@@ -70,12 +70,7 @@ public:
     //  ngoài pipeline, nên giữ nguyên ngữ nghĩa lỗi đồng bộ.)
     esp_err_t persistBaselineIfDirty();
 
-    AlertLevel getAlertLevel() const;
-    AqiCategory lastCategory() const;
-    ComfortCategory lastComfortCategory() const;
     bool hasBaseline() const;
-    int64_t lastCalibrationTimestamp() const;
-    const char *calibReason() const;
 
 private:
     struct Baseline {
@@ -332,7 +327,7 @@ private:
 //   §11) + data.alert_flags (bitmask FLAG_* — set ĐỘC LẬP cho TỪNG điều kiện
 //   đang active, song song với consider()/alert_reason, để KHÔNG mất thông
 //   tin khi nhiều điều kiện CRITICAL/WARNING xảy ra đồng thời, §11) VÀ lưu
-//   nội bộ (getAlertLevel). DataFusion KHÔNG chạm GPIO.
+//   nội bộ (last_alert_level_). DataFusion KHÔNG chạm GPIO.
 //   main.cpp sở hữu gpio_config() (GPIO25/26/27 LED, GPIO32 Buzzer — CLAUDE.md §5)
 //   và lái output theo AlertLevel + aqi_category trong ≤ ALERT_MAX_LATENCY_MS (3 s).
 //   NetworkManager::buildJson() đưa alert_level/alert_reason/calib_reason vào

@@ -325,6 +325,9 @@ extern "C" void app_main() {
     if (s_fusion.init() != ESP_OK) {
         ESP_LOGE(TAG, "DataFusion init thất bại — tiếp tục không có baseline hiệu chuẩn");
     }
+    if (!s_fusion.hasBaseline()) {
+        ESP_LOGW(TAG, "Chưa có baseline hiệu chuẩn — chờ cảm biến warmup để chốt mẫu đầu tiên");
+    }
 
     // ---- D.6: StorageHelper — SAU nvs_flash_init. KHÔNG ESP_ERROR_CHECK: SD
     //      vắng/hỏng vẫn phải chạy tiếp (StorageHelper.hpp §13 SD_ABSENT). ----

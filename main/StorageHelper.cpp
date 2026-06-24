@@ -423,6 +423,7 @@ const char *StorageHelper::eventTypeName(EventType type) {
         case EventType::SYSTEM_BOOT:            return "SYSTEM_BOOT";
         case EventType::SD_LOG_ROTATED:         return "SD_LOG_ROTATED";
         case EventType::ALERT_LATENCY_EXCEEDED: return "ALERT_LATENCY_EXCEEDED";
+        case EventType::WARMUP_DISPLAY_SKIPPED: return "WARMUP_DISPLAY_SKIPPED";
     }
     return "UNKNOWN";
 }
@@ -536,6 +537,9 @@ esp_err_t StorageHelper::drainOfflineRecords(const PublishFn &publish_fn) {
         if (pub_err == ESP_OK) {
             head++;
             sent++;
+            // Nghỉ giữa các lần publish — tránh broker (rate-limit per-device)
+            // đóng kết nối khi phát cả batch liên tiếp không nghỉ.
+            vTaskDelay(pdMS_TO_TICKS(Cfg::OFFLINE_DRAIN_PACE_MS));
         } else if (pub_err == ESP_ERR_INVALID_STATE) {
             // Rớt mạng giữa chừng — DỪNG, giữ phần còn lại cho lần sau (§5.3)
             ESP_LOGW(TAG,

@@ -32,7 +32,10 @@ inline constexpr int      I2C_PORT          = 0;         // I2C_NUM_0
 
 // ---- Địa chỉ thiết bị trên bus I2C dùng chung ----
 inline constexpr uint8_t  BME680_I2C_ADDR   = 0x76;      // SDO = GND
-inline constexpr uint8_t  PCF8574_I2C_ADDR  = 0x20;      // A0/A1/A2 = GND
+// [DEBUG] 0x20 (A0/A1/A2=GND) không phản hồi (ESP_ERR_INVALID_RESPONSE) trên
+// board thực tế — đang thử 0x27 (PCF8574 phổ biến trên module LCD backpack
+// giá rẻ). Nếu vẫn fail, thử 0x3F (PCF8574A, base address khác hẳn PCF8574).
+inline constexpr uint8_t  PCF8574_I2C_ADDR  = 0x27;
 
 // ============================================================
 // 2. PMS5003 — UART
@@ -142,6 +145,13 @@ inline constexpr size_t    OFFLINE_QUEUE_MAX_RECORDS = 2000;
 // Số record phát lại tối đa mỗi lượt drain (StorageHelper.hpp §5.3) — tránh
 // độc chiếm storageTask / flood broker.
 inline constexpr size_t    OFFLINE_DRAIN_BATCH  = 20;
+
+// Khoảng nghỉ giữa 2 lần publish khi drain (StorageHelper §5.3) — broker
+// (ThingsBoard Cloud) áp rate-limit per-device; phát hết batch liên tiếp
+// không nghỉ khiến broker đóng kết nối (transport EOF) ngay sau khi drain.
+// Chạy trong storageTask (không phải pipeline cảm biến) nên vTaskDelay ở
+// đây không vi phạm NFR ≤300ms / quy tắc non-blocking nghiệp vụ (CLAUDE.md §4).
+inline constexpr uint32_t  OFFLINE_DRAIN_PACE_MS = 300;
 
 // MAGIC + VERSION ở đầu offline_queue.bin (StorageHelper.hpp §5.1) — phát
 // hiện format cũ không tương thích (struct AirData đổi layout) để bỏ file cũ

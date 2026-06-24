@@ -54,6 +54,13 @@ static QueueHandle_t      s_airq = nullptr;
 enum class DisplayNotice : uint8_t { NET_LOST = 0, NET_RESTORED = 1 };
 static QueueHandle_t      s_display_notice = nullptr;
 
+// Lệnh MQTT "skip_warmup_display" — cmd_callback (context MQTT event task) ghi
+// (xQueueOverwrite), CHỈ taskDisplay đọc (xQueueReceive) rồi tự gọi
+// s_display.setForceSkipWarmupDisplay(), giữ đúng nguyên tắc "1 task duy nhất
+// chạm s_display" (XM-15). CHỈ ảnh hưởng hiển thị LCD — KHÔNG bypass cờ
+// *_ready dùng cho AQI/Drift/Alert/baseline (DisplayManager.hpp).
+static QueueHandle_t      s_display_skip_warmup = nullptr;
+
 // Nguồn thời gian thực dùng chung cho main.cpp (đồng nhất DataFusion.hpp §7 /
 // StorageHelper.hpp §7): Unix time nếu SNTP đã sync, ngược lại giây-từ-boot.
 static int64_t nowUnixOrUptime() {
@@ -178,6 +185,13 @@ static void taskDisplay(void *) {
             } else {
                 s_display.showMessage("NETWORK OK", "Syncing...");
             }
+        }
+
+        // Lệnh MQTT "skip_warmup_display" (cmd_callback ghi) — chỉ taskDisplay
+        // được gọi setForceSkipWarmupDisplay() (nguyên tắc XM-15).
+        bool skip_warmup;
+        if (xQueueReceive(s_display_skip_warmup, &skip_warmup, 0) == pdTRUE) {
+            s_display.setForceSkipWarmupDisplay(skip_warmup);
         }
 
         // Snapshot chỉ-đọc (XM-9). Trước khi taskSensor có chu kỳ đầu tiên,
@@ -309,6 +323,8 @@ extern "C" void app_main() {
     assert(s_airq != nullptr);
     s_display_notice = xQueueCreate(1, sizeof(DisplayNotice));  // XM-15
     assert(s_display_notice != nullptr);
+    s_display_skip_warmup = xQueueCreate(1, sizeof(bool));  // lệnh MQTT skip_warmup_display
+    assert(s_display_skip_warmup != nullptr);
 
     // ---- D.3: SensorManager — gọi i2cdev_init() lần đầu; PHẢI chạy TRƯỚC
     //      DisplayManager::init() (XM-4, cùng Cfg::I2C_PORT). Cốt lõi của hệ
@@ -340,23 +356,42 @@ extern "C" void app_main() {
     // quanh đọc/ghi s_shared rồi mới gọi confirmRecalibration(); KHÔNG retry tự động
     // khi lỗi. [StorageHelper.hpp §4.3] CALIB_CONFIRMED chỉ ghi khi err == ESP_OK.
     s_network.setCommandCallback([](const char *cmd) {
-        if (std::strcmp(cmd, "confirm_calib") != 0) {
-            return;
-        }
-        if (xSemaphoreTake(s_shared_mtx, pdMS_TO_TICKS(100)) != pdTRUE) {
-            ESP_LOGW(TAG, "confirm_calib: không lấy được shared_data_mutex");
-            return;
-        }
-        const bool synced = s_network.isTimeSynced();
-        const esp_err_t calib_err = s_fusion.confirmRecalibration(s_shared, synced);
-        const AirData snapshot = s_shared;
-        xSemaphoreGive(s_shared_mtx);
+        // skip_warmup_display: đề phòng rút/cắm điện liên tục khiến warmup
+        // (tính từ SensorManager::init(), reset mỗi lần boot) không bao giờ
+        // kết thúc trên LCD — CHỈ ép hiển thị số liệu thật ngay, KHÔNG bypass
+        // cờ *_ready dùng cho AQI/Drift/Alert/baseline (DisplayManager.hpp).
+        // Tự tắt khi cả 3 cảm biến ready thật — không cần lệnh tắt riêng.
+        if (std::strcmp(cmd, "skip_warmup_display") == 0) {
+            bool flag = true;
+            xQueueOverwrite(s_display_skip_warmup, &flag);
 
-        if (calib_err == ESP_OK) {
-            ESP_LOGI(TAG, "confirm_calib: hiệu chuẩn đã được xác nhận");
-            s_storage.logEvent(StorageHelper::EventType::CALIB_CONFIRMED, snapshot);
-        } else {
-            ESP_LOGW(TAG, "confirm_calib thất bại: %s", esp_err_to_name(calib_err));
+            AirData snapshot{};
+            if (xSemaphoreTake(s_shared_mtx, pdMS_TO_TICKS(100)) == pdTRUE) {
+                snapshot = s_shared;
+                xSemaphoreGive(s_shared_mtx);
+            }
+            ESP_LOGI(TAG, "skip_warmup_display: bỏ qua hiển thị WARMING UP trên LCD");
+            s_storage.logEvent(StorageHelper::EventType::WARMUP_DISPLAY_SKIPPED, snapshot);
+            return;
+        }
+
+        if (std::strcmp(cmd, "confirm_calib") == 0) {
+            if (xSemaphoreTake(s_shared_mtx, pdMS_TO_TICKS(100)) != pdTRUE) {
+                ESP_LOGW(TAG, "confirm_calib: không lấy được shared_data_mutex");
+                return;
+            }
+            const bool synced = s_network.isTimeSynced();
+            const esp_err_t calib_err = s_fusion.confirmRecalibration(s_shared, synced);
+            const AirData snapshot = s_shared;
+            xSemaphoreGive(s_shared_mtx);
+
+            if (calib_err == ESP_OK) {
+                ESP_LOGI(TAG, "confirm_calib: hiệu chuẩn đã được xác nhận");
+                s_storage.logEvent(StorageHelper::EventType::CALIB_CONFIRMED, snapshot);
+            } else {
+                ESP_LOGW(TAG, "confirm_calib thất bại: %s", esp_err_to_name(calib_err));
+            }
+            return;
         }
     });
 

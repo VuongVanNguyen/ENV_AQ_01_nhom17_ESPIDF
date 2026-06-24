@@ -27,7 +27,7 @@ DisplayManager::DisplayManager()
       current_state_(DisplayState::WARMING_UP),
       shadow_{},
       current_display_{},
-      blink_state_(true),
+      calib_alert_active_(false),
       overlay_active_(false),
       overlay_expire_us_(0) {}
 
@@ -128,15 +128,10 @@ void DisplayManager::update(const AirData &data) {
     // Xóa sạch buffer ảo bằng phím Space trước khi vẽ frame mới
     memset(shadow_, ' ', sizeof(shadow_));
 
-    if (current_state_ == DisplayState::CALIB_ALERT) {
-        snprintf(shadow_[0], 17, "  CALIB NEEDED  ");
-        snprintf(shadow_[1], 17, "  CHECK SENSOR  ");
-    } 
-    else if (current_state_ == DisplayState::WARMING_UP) {
+    if (current_state_ == DisplayState::WARMING_UP) {
         snprintf(shadow_[0], 17, "   WARMING UP   ");
         snprintf(shadow_[1], 17, "  Please wait.. ");
-    } 
-    else if (current_state_ == DisplayState::NORMAL) {
+    } else {
         renderToShadow(data);
     }
 
@@ -147,27 +142,64 @@ void DisplayManager::update(const AirData &data) {
         }
     }
 
+    if (calib_alert_active_ && current_state_ == DisplayState::NORMAL) {
+        int row = calibAlertRow(data.calib_reason);
+        if (row >= 0) {
+            int last = 15;
+            while (last > 0 && shadow_[row][last] == ' ') last--;
+            int mark_col = (last < 15) ? last + 1 : 15;
+            shadow_[row][mark_col] = '!';
+        }
+    }
+
     commitDirtyCheck();
 }
 
 void DisplayManager::evaluateState(const AirData &data) {
-    DisplayState prev_state = current_state_;
+    // Cờ skip_warmup_display tự vô hiệu ngay khi cả 3 cảm biến đã ready thật —
+    // không cần lệnh tắt riêng (xem setForceSkipWarmupDisplay()).
+    if (force_skip_warmup_display_ &&
+        data.bme680_ready && data.pms5003_ready && data.mq135_ready) {
+        force_skip_warmup_display_ = false;
+    }
 
-    if (data.calib_needed) {
-        current_state_ = DisplayState::CALIB_ALERT;
-    } else if (!data.bme680_ready && !data.pms5003_ready && !data.mq135_ready) {
+    if (!data.bme680_ready && !data.pms5003_ready && !data.mq135_ready &&
+        !force_skip_warmup_display_) {
         // Chưa cảm biến nào ready (mới boot) — chưa có gì để hiển thị.
         current_state_ = DisplayState::WARMING_UP;
     } else {
         current_state_ = DisplayState::NORMAL;
     }
 
-    // Rời khỏi CALIB_ALERT: tick() có thể đã tắt backlight để nhấp nháy —
-    // đảm bảo bật lại và reset nhịp blink cho lần cảnh báo kế tiếp.
-    if (prev_state == DisplayState::CALIB_ALERT && current_state_ != DisplayState::CALIB_ALERT) {
-        blink_state_ = true;
-        hd44780_switch_backlight(&lcd_, true);
+    calib_alert_active_ = data.calib_needed;
+}
+
+// ============================================================================
+// ÁNH XẠ calib_reason → DÒNG CẦN VẼ "!" TRÊN TRANG ĐANG HIỂN THỊ
+// ============================================================================
+int DisplayManager::calibAlertRow(const char *reason) const {
+    if (!reason) return -1;
+    auto match = [&](const char *s) { return strcmp(reason, s) == 0; };
+
+    switch (current_page_) {
+        case ScreenPage::MAIN_AQI_CI:
+            if (match("CALIB_DRIFT_AQI")) return 0;       // dòng AQI
+            if (match("CALIB_DRIFT_COMFORT")) return 1;   // dòng CI
+            if (match("CALIB_OVERDUE_30D")) return 0;     // quá hạn chung — báo ở dòng đầu
+            return -1;
+
+        case ScreenPage::MAIN_CO2_PM:
+            if (match("CALIB_DRIFT_CO2")) return 0;       // dòng CO2
+            if (match("CALIB_DRIFT_PM25") || match("CALIB_DRIFT_PM10")) return 1; // dòng PM
+            if (match("CALIB_OVERDUE_30D")) return 0;
+            return -1;
+
+        case ScreenPage::DETAIL:
+            if (match("CALIB_DRIFT_TEMP") || match("CALIB_DRIFT_HUMI")) return 0; // dòng T/RH
+            if (match("CALIB_OVERDUE_30D")) return 0;
+            return -1;
     }
+    return -1;
 }
 
 // ============================================================================
@@ -179,7 +211,7 @@ void DisplayManager::renderToShadow(const AirData &data) {
     switch (current_page_) {
         case ScreenPage::MAIN_AQI_CI:
             {
-                if (data.pms5003_ready) {
+                if (data.pms5003_ready || force_skip_warmup_display_) {
                     const char* aqi_labels[] = {"Good", "Fair", "Poor", "Bad", "VeryBad", "Hazard"};
                     uint8_t aqi_cat = (data.aqi_category <= 5) ? data.aqi_category : 5;
                     snprintf(shadow_[0], 17, "AQI:%03d %s", (int)lroundf(data.aqi), aqi_labels[aqi_cat]);
@@ -187,7 +219,7 @@ void DisplayManager::renderToShadow(const AirData &data) {
                     snprintf(shadow_[0], 17, "AQI: WARMING UP");
                 }
 
-                if (data.bme680_ready) {
+                if (data.bme680_ready || force_skip_warmup_display_) {
                     // Nhãn CI: data.comfort_category đã được DataFusion phân loại
                     // theo thang Thom DI 6 mức (config.hpp §14) — Display chỉ map số→nhãn.
                     const char* ci_labels[] = {"Good", "S.Hot", "Hot", "V.Hot", "Stress", "Danger"};
@@ -201,7 +233,7 @@ void DisplayManager::renderToShadow(const AirData &data) {
 
         case ScreenPage::MAIN_CO2_PM:
             {
-                if (data.mq135_ready) {
+                if (data.mq135_ready || force_skip_warmup_display_) {
                     // Phân loại CO2 theo Cfg::CO2_GOOD_MAX/CO2_MODERATE_MAX (config.hpp §15)
                     const char* co2_labels[] = {"OK", "Mod", "Bad"};
                     uint8_t co2_cat;
@@ -217,9 +249,8 @@ void DisplayManager::renderToShadow(const AirData &data) {
                     snprintf(shadow_[0], 17, "CO2: WARMING UP");
                 }
 
-                if (data.pms5003_ready) {
-                    // Dùng % 1000 để cam kết với compiler số này chỉ có tối đa 3 chữ số
-                    snprintf(shadow_[1], 17, "PM25:%03d P10:%03d", (unsigned int)data.pm2_5 % 1000, (unsigned int)data.pm10 % 1000);
+                if (data.pms5003_ready || force_skip_warmup_display_) {
+                    snprintf(shadow_[1], 17, "P25:%03d P10:%03d", (unsigned int)data.pm2_5 % 1000, (unsigned int)data.pm10 % 1000);
                 } else {
                     snprintf(shadow_[1], 17, "PM: WARMING UP");
                 }
@@ -227,7 +258,7 @@ void DisplayManager::renderToShadow(const AirData &data) {
             break;
 
         case ScreenPage::DETAIL:
-            if (data.bme680_ready) {
+            if (data.bme680_ready || force_skip_warmup_display_) {
                 // Độ rộng cố định: %5.1f cho temperature (dải sanity -40.0..85.0
                 // → tối đa "-40.0" = 5 ký tự) và %3d cho humidity (dải sanity
                 // 0..100 → tối đa "100" = 3 ký tự). Tổng = 16 ký tự cho mọi giá
@@ -281,12 +312,6 @@ void DisplayManager::tick() {
             next_page = 0;
         }
         current_page_ = static_cast<ScreenPage>(next_page);
-    } else if (current_state_ == DisplayState::CALIB_ALERT) {
-        // Nhấp nháy backlight theo nhịp gọi tick() — tách rời khỏi Rotate
-        // (chỉ áp dụng cho NORMAL ở trên) để cảnh báo tái hiệu chuẩn không
-        // bị bỏ sót (NFR §3 độ trễ cảnh báo & ổn định dài hạn).
-        blink_state_ = !blink_state_;
-        hd44780_switch_backlight(&lcd_, blink_state_);
     }
 }
 
@@ -310,3 +335,7 @@ void DisplayManager::setBacklight(bool on) {
     if (!initialized_) return;
     hd44780_switch_backlight(&lcd_, on);
 } //Có thể bỏ nếu ko dùng đến, hiện tại chưa có caller nào (dead code) — xem [XM-6] trong header.
+
+void DisplayManager::setForceSkipWarmupDisplay(bool on) {
+    force_skip_warmup_display_ = on;
+}

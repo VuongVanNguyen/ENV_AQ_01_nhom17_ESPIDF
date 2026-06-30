@@ -20,7 +20,8 @@ DataFusion::DataFusion()
       alert_level_changed_us_(0),
       last_category_(AqiCategory::GOOD),
       last_comfort_category_(ComfortCategory::COMFORTABLE),
-      nvs_handle_(0), mutex_(nullptr) 
+      last_co2_category_(Co2Category::GOOD),
+      nvs_handle_(0), mutex_(nullptr)
 {
     setReason(kNoCalibReason);
 }
@@ -86,6 +87,13 @@ void DataFusion::process(AirData &data, bool time_synced) {
         data.comfort_index = NAN;
         data.comfort_category = static_cast<uint8_t>(ComfortCategory::COMFORTABLE);
         last_comfort_category_ = ComfortCategory::COMFORTABLE;
+    }
+
+    if (data.mq135_ready) {
+        computeCo2Category(data);
+    } else {
+        data.co2_category = static_cast<uint8_t>(Co2Category::GOOD);
+        last_co2_category_ = Co2Category::GOOD;
     }
 
     if (data.bme680_ready && !(baseline_mask_ & BASELINE_BME680_BIT)) {
@@ -167,6 +175,7 @@ void DataFusion::setSafeSentinel(AirData &data) const {
     data.aqi_category = static_cast<uint8_t>(AqiCategory::GOOD);
     data.comfort_index = NAN;
     data.comfort_category = static_cast<uint8_t>(ComfortCategory::COMFORTABLE);
+    data.co2_category = static_cast<uint8_t>(Co2Category::GOOD);
     data.calib_needed = false;
     data.last_calib_timestamp = last_calib_ts_;
     data.alert_level = static_cast<uint8_t>(AlertLevel::NONE);
@@ -486,6 +495,24 @@ void DataFusion::computeComfort(AirData &data) {
     }
 
     data.comfort_category = static_cast<uint8_t>(last_comfort_category_);
+}
+
+void DataFusion::computeCo2Category(AirData &data) {
+    if (!hasFiniteValue(data.co2_ppm) || data.co2_ppm < 0.0f) {
+        data.co2_category = static_cast<uint8_t>(Co2Category::GOOD);
+        last_co2_category_ = Co2Category::GOOD;
+        return;
+    }
+
+    if (data.co2_ppm <= Cfg::CO2_GOOD_MAX) {
+        last_co2_category_ = Co2Category::GOOD;
+    } else if (data.co2_ppm <= Cfg::CO2_MODERATE_MAX) {
+        last_co2_category_ = Co2Category::MODERATE;
+    } else {
+        last_co2_category_ = Co2Category::BAD;
+    }
+
+    data.co2_category = static_cast<uint8_t>(last_co2_category_);
 }
 
 void DataFusion::driftSelfCheck(AirData &data, bool time_synced) {

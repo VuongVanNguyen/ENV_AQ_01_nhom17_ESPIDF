@@ -25,13 +25,9 @@ menu "ENV-AQ-01 Project Configuration"
             string "MQTT Publish Topic"
             default "env/aq01/data"
             help
-                Topic để publish dữ liệu cảm biến.
-
-        config MQTT_TOPIC_ALERT
-            string "MQTT Alert Topic"
-            default "env/aq01/alert"
-            help
-                Topic để publish cảnh báo (calib_alert, threshold breach).
+                Topic để publish dữ liệu cảm biến (periodic) VÀ cảnh báo
+                (edge-triggered, calib_alert/threshold breach) — 2 luồng
+                phân biệt bằng field "msg_type" ("data"/"alert") trong JSON.
 
         config MQTT_TOPIC_CMD
             string "MQTT Command Topic prefix (subscribe, RPC)"

@@ -234,16 +234,9 @@ void DisplayManager::renderToShadow(const AirData &data) {
         case ScreenPage::MAIN_CO2_PM:
             {
                 if (data.mq135_ready || force_skip_warmup_display_) {
-                    // Phân loại CO2 theo Cfg::CO2_GOOD_MAX/CO2_MODERATE_MAX (config.hpp §15)
+                    // co2_category đã được DataFusion phân loại (config.hpp §9) — Display chỉ map số→nhãn.
                     const char* co2_labels[] = {"OK", "Mod", "Bad"};
-                    uint8_t co2_cat;
-                    if (data.co2_ppm <= Cfg::CO2_GOOD_MAX) {
-                        co2_cat = 0;
-                    } else if (data.co2_ppm <= Cfg::CO2_MODERATE_MAX) {
-                        co2_cat = 1;
-                    } else {
-                        co2_cat = 2;
-                    }
+                    uint8_t co2_cat = (data.co2_category <= 2) ? data.co2_category : 2;
                     snprintf(shadow_[0], 17, "CO2:%04d ppm %s", (int)lroundf(data.co2_ppm), co2_labels[co2_cat]);
                 } else {
                     snprintf(shadow_[0], 17, "CO2: WARMING UP");

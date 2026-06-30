@@ -48,12 +48,17 @@ public:
     // hàm trả về ngay sau khi đăng ký handler và start driver.
     esp_err_t init();
 
-    // Serialize AirData → JSON và publish lên topic dữ liệu chính.
+    // Serialize AirData → JSON (msg_type="data") và publish lên MQTT_TOPIC_DATA.
+    // Gọi mỗi chu kỳ taskNetwork (periodic heartbeat).
     // Trả ESP_ERR_INVALID_STATE nếu MQTT chưa connected — caller
     // (taskNetwork) sẽ buffer xuống SD card qua StorageHelper.
     esp_err_t publishData(const AirData &data);
 
-    // Publish cảnh báo (calib drift / ngưỡng vượt mức) lên topic alert.
+    // Serialize AirData → JSON (msg_type="alert") và publish lên cùng
+    // MQTT_TOPIC_DATA — chỉ gọi khi alert_level đổi mức (edge-triggered,
+    // debounce ở taskNetwork), tách rời khỏi cadence định kỳ của publishData
+    // để đáp ứng NFR ALERT_MAX_LATENCY_MS. Cùng topic với publishData; phân
+    // biệt 2 luồng bằng field "msg_type" trong JSON (xem buildJson()).
     // Lý do cảnh báo lấy từ data.alert_reason (DataFusion.hpp §8/§11, đã ghi sẵn
     // bởi DataFusion::computeAlertLevel — lý do CAO NHẤT trong chu kỳ, có thể
     // là AQI/Comfort/CO2 ở mức CRITICAL). Lý do hiệu chuẩn CỤ THỂ
@@ -117,11 +122,12 @@ private:
     // Trả số byte ghi vào `out` (không kèm '\0') hoặc 0 nếu lỗi/buffer nhỏ.
     // data.alert_level/data.alert_reason/data.calib_reason (§8/§11) luôn được
     // đưa vào JSON — dùng chung cho cả publishData và publishAlert, không cần
-    // tham số riêng.
-    static size_t buildJson(const AirData &data, char *out, size_t out_sz);
+    // tham số riêng. `msg_type` ("data"/"alert") được nhúng thêm vào JSON để
+    // phân biệt 2 luồng publish khi cùng publish lên 1 topic (MQTT_TOPIC_DATA).
+    static size_t buildJson(const AirData &data, const char *msg_type, char *out, size_t out_sz);
 
-    // Helper chung cho publishData/publishAlert: serialize + publish lên `topic`.
-    // Trả ESP_ERR_INVALID_STATE nếu MQTT chưa connected, ESP_FAIL nếu serialize
-    // lỗi/buffer nhỏ hoặc publish thất bại.
-    esp_err_t publishJson(const char *topic, const AirData &data);
+    // Helper chung cho publishData/publishAlert: serialize (kèm msg_type) +
+    // publish lên Cfg::MQTT_TOPIC_DATA. Trả ESP_ERR_INVALID_STATE nếu MQTT
+    // chưa connected, ESP_FAIL nếu serialize lỗi/buffer nhỏ hoặc publish thất bại.
+    esp_err_t publishJson(const char *msg_type, const AirData &data);
 };

@@ -272,7 +272,6 @@ inline constexpr const char *WIFI_SSID         = CONFIG_WIFI_SSID;
 inline constexpr const char *WIFI_PASSWORD     = CONFIG_WIFI_PASSWORD;
 inline constexpr const char *MQTT_BROKER_URL   = CONFIG_MQTT_BROKER_URL;
 inline constexpr const char *MQTT_TOPIC_DATA   = CONFIG_MQTT_TOPIC;
-inline constexpr const char *MQTT_TOPIC_ALERT  = CONFIG_MQTT_TOPIC_ALERT;
 inline constexpr const char *MQTT_TOPIC_CMD    = CONFIG_MQTT_TOPIC_CMD;  // subscribe — nhận lệnh từ broker
 inline constexpr const char *MQTT_ACCESS_TOKEN = CONFIG_MQTT_ACCESS_TOKEN;  // username MQTT (rỗng nếu broker không cần auth)
 inline constexpr const char *NTP_SERVER_URL    = CONFIG_NTP_SERVER_URL;  // SNTP server
@@ -287,7 +286,6 @@ inline constexpr size_t   FILTER_WINDOW_SIZE   = 5;     // Cửa sổ SMA humidi
 // EMA alpha — hệ số làm trơn theo từng kênh (Mục 7.2 / 7.3 / 7.4)
 inline constexpr float    EMA_ALPHA_TEMP       = 0.10f; // BME680 temperature
 inline constexpr float    EMA_ALPHA_PRESS      = 0.10f; // BME680 pressure
-inline constexpr float    EMA_ALPHA_GAS        = 0.25f; // BME680 gas resistance
 inline constexpr float    EMA_ALPHA_CO2        = 0.20f; // MQ-135 CO2 ppm (sau bù T/RH)
 inline constexpr float    EMA_ALPHA_PM1        = 0.50f; // PMS5003 PM1.0
 inline constexpr float    EMA_ALPHA_PM25       = 0.50f; // PMS5003 PM2.5
@@ -300,8 +298,6 @@ inline constexpr float    SANITY_HUMI_MIN      =     0.0f;   // %RH
 inline constexpr float    SANITY_HUMI_MAX      =   100.0f;   // %RH
 inline constexpr float    SANITY_PRESS_MIN     =   300.0f;   // hPa
 inline constexpr float    SANITY_PRESS_MAX     =  1100.0f;   // hPa
-inline constexpr float    SANITY_GAS_MIN       =  1000.0f;   // Ω (1 kΩ = 1000 Ω)
-inline constexpr float    SANITY_GAS_MAX       = 500000.0f;  // Ω (500 kΩ = 500000 Ω)
 inline constexpr float    SANITY_CO2_MIN       =   100.0f;   // ppm
 inline constexpr float    SANITY_CO2_MAX       =  5000.0f;   // ppm
 inline constexpr float    SANITY_PM_MIN        =     0.0f;   // µg/m³

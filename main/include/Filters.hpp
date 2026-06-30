@@ -42,7 +42,7 @@ public:
 
     // Truy vấn trạng thái filter hiện tại (debug/JTAG, không tác dụng phụ).
     // Trả true nếu tất cả kênh đã qua warm-start; false nếu bất kỳ kênh nào chưa sẵn sàng.
-    bool getFilterState(float &temp, float &humi, float &press, float &gas,
+    bool getFilterState(float &temp, float &humi, float &press,
                         float &co2,  float &pm1,  float &pm25,  float &pm10) const;
 
 private:
@@ -64,7 +64,6 @@ private:
     EmaState ema_temp_;
     SmaState sma_humi_;
     EmaState ema_press_;
-    EmaState ema_gas_;
     EmaState ema_co2_;
     EmaState ema_pm1_;
     EmaState ema_pm25_;

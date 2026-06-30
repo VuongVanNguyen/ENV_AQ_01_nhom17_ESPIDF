@@ -6,7 +6,7 @@
 // AirData — Struct chia sẻ giữa tất cả module trong project.
 //   SensorManager  → ghi (raw + readiness flags + timestamp)
 //   Filters        → đọc/ghi (làm sạch + cập nhật ngược)
-//   DataFusion     → ghi (aqi, comfort, calib_needed)
+//   DataFusion     → ghi (aqi, comfort, co2_category, calib_needed)
 //   DisplayManager → đọc (hiển thị)
 //   NetworkManager → đọc (publish JSON)
 //   StorageHelper  → đọc (log CSV / offline queue)
@@ -31,6 +31,7 @@ struct AirData {
     uint8_t aqi_category;   // 0=Tốt 1=Trung bình 2=Kém 3=Xấu 4=Rất xấu 5=Nguy hại
     float comfort_index;    // THI (Discomfort Index, °C)
     uint8_t comfort_category; // 0=Dễ chịu 1=Hơi nóng 2=Nóng khó chịu 3=Rất khó chịu 4=Stress nhiệt 5=Cấp cứu
+    uint8_t co2_category;   // 0=Tốt (<1000ppm) 1=Trung bình (1000–2000ppm) 2=Xấu (>2000ppm)
 
     // ---- Cảnh báo vượt ngưỡng (DataFusion::computeAlertLevel) ----
     //   alert_level: 0=NONE 1=WARNING 2=CRITICAL (DataFusion::AlertLevel).

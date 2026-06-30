@@ -36,7 +36,7 @@ static constexpr int64_t kY2020Epoch = 1577836800;
 static constexpr const char *kDataHeader =
     "timestamp,time_valid,temperature,humidity,pressure,"
     "pm1_0,pm2_5,pm10,co2_ppm,aqi,aqi_category,"
-    "comfort_index,comfort_category,alert_level,alert_reason,"
+    "comfort_index,comfort_category,co2_category,alert_level,alert_reason,"
     "alert_flags,calib_needed,calib_reason,"
     "bme680_ready,pms5003_ready,mq135_ready,data_valid,cycle_time_ms\n";
 
@@ -280,14 +280,14 @@ esp_err_t StorageHelper::writeDataRow(const AirData &data) {
     // Thứ tự cột khớp kDataHeader (§3.2):
     //   timestamp,time_valid,temperature,humidity,pressure,
     //   pm1_0,pm2_5,pm10,co2_ppm,aqi,aqi_category,
-    //   comfort_index,comfort_category,alert_level,alert_reason,
+    //   comfort_index,comfort_category,co2_category,alert_level,alert_reason,
     //   alert_flags,calib_needed,calib_reason,
     //   bme680_ready,pms5003_ready,mq135_ready,data_valid,cycle_time_ms
     int n = fprintf(
         f,
         "%lld,%d,%s,%s,%s,"
         "%u,%u,%u,%s,%s,%u,"
-        "%s,%u,%u,%s,"
+        "%s,%u,%u,%u,%s,"
         "0x%04X,%d,%s,"
         "%d,%d,%d,%d,%u\n",
         static_cast<long long>(data.timestamp), timeValidOf(data.timestamp),
@@ -295,6 +295,7 @@ esp_err_t StorageHelper::writeDataRow(const AirData &data) {
         static_cast<unsigned>(data.pm2_5), static_cast<unsigned>(data.pm10),
         co2_buf, aqi_buf, static_cast<unsigned>(data.aqi_category), ci_buf,
         static_cast<unsigned>(data.comfort_category),
+        static_cast<unsigned>(data.co2_category),
         static_cast<unsigned>(data.alert_level), alert_reason_esc,
         static_cast<unsigned>(data.alert_flags), data.calib_needed ? 1 : 0,
         calib_reason_esc, data.bme680_ready ? 1 : 0,

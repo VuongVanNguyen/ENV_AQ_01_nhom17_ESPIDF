@@ -33,6 +33,16 @@ public:
         DANGER       = 5,  // DI >= DANGER       : cấp cứu y tế / nguy hiểm tính mạng
     };
 
+    // Phân loại CO2 (3 mức) — theo ngưỡng Cfg::CO2_GOOD_MAX/CO2_MODERATE_MAX (config.hpp §9).
+    // Dùng cho Display (map số→nhãn) và Network (publish co2_cat).
+    // TÁCH BIỆT với ngưỡng cảnh báo ALERT_CO2_PPM/ALERT_CO2_CRITICAL_PPM (config.hpp §8):
+    // co2_category phản ánh chất lượng không khí theo ASHRAE; alert dùng ngưỡng riêng.
+    enum class Co2Category : uint8_t {
+        GOOD     = 0,  // co2_ppm <= CO2_GOOD_MAX     : tốt   (< 1000 ppm)
+        MODERATE = 1,  // CO2_GOOD_MAX < ppm <= MODERATE_MAX: trung bình (1000–2000 ppm)
+        BAD      = 2,  // co2_ppm > CO2_MODERATE_MAX  : xấu   (> 2000 ppm)
+    };
+
     enum class AlertLevel : uint8_t {
         NONE     = 0,
         WARNING  = 1,
@@ -114,6 +124,7 @@ private:
 
     AqiCategory last_category_;
     ComfortCategory last_comfort_category_;
+    Co2Category last_co2_category_;
     char last_calib_reason_[32];
 
     nvs_handle_t nvs_handle_;
@@ -137,6 +148,7 @@ private:
     void initializeBaselineGroup(uint8_t group_bit, const AirData &data, bool time_synced);
     void computeAqi(AirData &data);
     void computeComfort(AirData &data);
+    void computeCo2Category(AirData &data);
     void driftSelfCheck(AirData &data, bool time_synced);
     void computeAlertLevel(AirData &data);
     float computeAqiSubindex(float concentration, const float *breakpoints) const;
@@ -397,8 +409,8 @@ private:
 // ----------------------------------------------------------------------------
 //   ĐỌC : temperature, humidity, pressure, pm2_5, pm10, co2_ppm,
 //          bme680_ready, pms5003_ready, mq135_ready, data_valid, timestamp.
-//   GHI : aqi, aqi_category, comfort_index, comfort_category, calib_needed,
-//          alert_level, alert_reason, alert_flags, calib_reason,
+//   GHI : aqi, aqi_category, comfort_index, comfort_category, co2_category,
+//          calib_needed, alert_level, alert_reason, alert_flags, calib_reason,
 //          last_calib_timestamp (CHỈ trong confirmRecalibration / init lần đầu).
 //
 //   QUY TẮC: mỗi chỉ số chỉ tính khi cảm biến nguồn đã ready (§1 process). Khi chưa
@@ -432,6 +444,7 @@ private:
 //   - ESP_LOGW khi phát hiện drift hoặc quá hạn calib; ESP_LOGI khi chốt baseline mới.
 //   - KHÔNG xoá/comment ESP_LOG* khi commit (nguồn debug song song JTAG — §6.5).
 //   - Các biến nên theo dõi qua JTAG: data.aqi, data.comfort_index,
-//     data.comfort_category, data.co2_ppm, baseline NVS, dev%, AlertLevel —
+//     data.comfort_category, data.co2_ppm, data.co2_category,
+//     baseline NVS, dev%, AlertLevel —
 //     phục vụ nghiệm thu sai số ≤ 10% (CLAUDE.md §3).
 

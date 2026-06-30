@@ -25,7 +25,6 @@ Filters::Filters() {
 void Filters::reset() {
     ema_temp_  = {0.0f, false};
     ema_press_ = {0.0f, false};
-    ema_gas_   = {0.0f, false};
     ema_co2_   = {0.0f, false};
     ema_pm1_   = {0.0f, false};
     ema_pm25_  = {0.0f, false};
@@ -65,7 +64,9 @@ void Filters::process(AirData &data) {
 }
 
 // ============================================================
-// BME680: temperature (EMA), humidity (SMA), pressure (EMA), gas_resistance (EMA)
+// BME680: temperature (EMA), humidity (SMA), pressure (EMA)
+// gas_resistance: không lọc — chỉ giữ giá trị thô (SensorManager) để xem qua JTAG,
+// không feed vào AQI/Comfort/CO2/alert nào (CLAUDE.md: đã bỏ tính TVOC)
 // ============================================================
 void Filters::processBme680(AirData &data) {
     if (!data.bme680_ready) {
@@ -73,7 +74,6 @@ void Filters::processBme680(AirData &data) {
         if (ema_temp_.initialized)  data.temperature    = ema_temp_.prev;
         if (sma_humi_.count > 0)    data.humidity       = sma_humi_.last_output;
         if (ema_press_.initialized) data.pressure       = ema_press_.prev;
-        if (ema_gas_.initialized)   data.gas_resistance = ema_gas_.prev;
         return;
     }
 
@@ -106,18 +106,6 @@ void Filters::processBme680(AirData &data) {
         ESP_LOGW(TAG, "Áp suất ngoài mức cho phép: %.2f hPa [%.0f, %.0f]",
                  data.pressure, Cfg::SANITY_PRESS_MIN, Cfg::SANITY_PRESS_MAX);
         if (ema_press_.initialized) { data.pressure = ema_press_.prev; }
-    }
-
-    // ---- Gas resistance — EMA α = Cfg::EMA_ALPHA_GAS ----
-    // Range in Ω: SANITY_GAS_MIN=1000 (1kΩ), SANITY_GAS_MAX=500000 (500kΩ)
-    if (inRange(data.gas_resistance, Cfg::SANITY_GAS_MIN, Cfg::SANITY_GAS_MAX)) {
-        data.gas_resistance = ema_gas_.initialized
-            ? emaUpdate(ema_gas_, data.gas_resistance, Cfg::EMA_ALPHA_GAS)
-            : emaWarmStart(ema_gas_, data.gas_resistance);
-    } else {
-        ESP_LOGW(TAG, "Khí gas ngoài mức cho phép: %.0f Ohm [%.0f, %.0f]",
-                 data.gas_resistance, Cfg::SANITY_GAS_MIN, Cfg::SANITY_GAS_MAX);
-        if (ema_gas_.initialized) { data.gas_resistance = ema_gas_.prev; }
     }
 }
 
@@ -262,7 +250,6 @@ bool Filters::inRange(float x, float lo, float hi) {
 void Filters::resetBme680State() {
     ema_temp_  = {0.0f, false};
     ema_press_ = {0.0f, false};
-    ema_gas_   = {0.0f, false};
     sma_humi_.buf.fill(0.0f);
     sma_humi_.write_idx   = 0;
     sma_humi_.count       = 0;
@@ -285,19 +272,18 @@ void Filters::resetPms5003State() {
 // ============================================================
 // getFilterState() — truy vấn trạng thái hiện tại (debug/JTAG)
 // ============================================================
-bool Filters::getFilterState(float &temp, float &humi, float &press, float &gas,
+bool Filters::getFilterState(float &temp, float &humi, float &press,
                               float &co2,  float &pm1,  float &pm25,  float &pm10) const {
     temp  = ema_temp_.initialized  ? ema_temp_.prev  : 0.0f;
     humi  = (sma_humi_.count > 0)  ? sma_humi_.last_output : 0.0f;
     press = ema_press_.initialized ? ema_press_.prev : 0.0f;
-    gas   = ema_gas_.initialized   ? ema_gas_.prev   : 0.0f;
     co2   = ema_co2_.initialized   ? ema_co2_.prev   : 0.0f;
     pm1   = ema_pm1_.initialized   ? ema_pm1_.prev   : 0.0f;
     pm25  = ema_pm25_.initialized  ? ema_pm25_.prev  : 0.0f;
     pm10  = ema_pm10_.initialized  ? ema_pm10_.prev  : 0.0f;
 
     return ema_temp_.initialized  && (sma_humi_.count > 0) &&
-           ema_press_.initialized && ema_gas_.initialized  &&
+           ema_press_.initialized &&
            ema_co2_.initialized   && ema_pm1_.initialized  &&
            ema_pm25_.initialized  && ema_pm10_.initialized;
 }

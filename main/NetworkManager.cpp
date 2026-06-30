@@ -193,23 +193,24 @@ esp_err_t NetworkManager::initSntp() {
 // Public API
 // ============================================================
 esp_err_t NetworkManager::publishData(const AirData &data) {
-    return publishJson(Cfg::MQTT_TOPIC_DATA, data);
+    return publishJson("data", data);
 }
 
 esp_err_t NetworkManager::publishAlert(const AirData &data) {
-    return publishJson(Cfg::MQTT_TOPIC_ALERT, data);
+    return publishJson("alert", data);
 }
 
-esp_err_t NetworkManager::publishJson(const char *topic, const AirData &data) {
+esp_err_t NetworkManager::publishJson(const char *msg_type, const AirData &data) {
     if (!mqtt_connected_.load()) return ESP_ERR_INVALID_STATE;
 
     char json[Cfg::MQTT_JSON_BUF_LEN];
-    size_t n = buildJson(data, json, sizeof(json));
+    size_t n = buildJson(data, msg_type, json, sizeof(json));
     if (n == 0) return ESP_FAIL;
 
     // QoS 1: đảm bảo broker nhận ít nhất 1 lần — nếu PUBACK mất, client retransmit
     // và subscriber có thể nhận duplicate. Dedup phía subscriber bằng (ts, client_id).
-    int msg_id = esp_mqtt_client_publish(mqtt_, topic, json, static_cast<int>(n), 1, 0);
+    int msg_id = esp_mqtt_client_publish(mqtt_, Cfg::MQTT_TOPIC_DATA, json,
+                                          static_cast<int>(n), 1, 0);
     return (msg_id >= 0) ? ESP_OK : ESP_FAIL;
 }
 
@@ -364,11 +365,17 @@ void NetworkManager::dispatchCommand(const char *cmd) {
 // ============================================================
 // JSON builder — cJSON_PrintPreallocated: không alloc heap động
 // ============================================================
-size_t NetworkManager::buildJson(const AirData &data, char *out, size_t out_sz) {
+size_t NetworkManager::buildJson(const AirData &data, const char *msg_type, char *out, size_t out_sz) {
     cJSON *root = cJSON_CreateObject();
     if (!root) return 0;  // heap cạn kiệt — caller log và xử lý
 
     // --- Metadata ---
+    // msg_type: "data" (publishData, periodic) hoặc "alert" (publishAlert,
+    // edge-triggered khi alert_level đổi mức) — cả 2 cùng publish lên
+    // Cfg::MQTT_TOPIC_DATA, field này là cách DUY NHẤT để dashboard phân biệt
+    // lại 2 luồng vì ThingsBoard gộp telemetry theo (device, key, ts), không
+    // giữ lại topic MQTT gốc.
+    cJSON_AddStringToObject(root, "msg_type", msg_type);
     cJSON_AddNumberToObject(root, "ts",      (double)data.timestamp);
     cJSON_AddBoolToObject  (root, "valid",   data.data_valid);
     // cycle_ms: thời gian taskSensor xử lý chu kỳ này — cho dashboard giám sát
@@ -379,7 +386,6 @@ size_t NetworkManager::buildJson(const AirData &data, char *out, size_t out_sz) 
     cJSON_AddNumberToObject(root, "temp",    data.temperature);
     cJSON_AddNumberToObject(root, "humi",    data.humidity);
     cJSON_AddNumberToObject(root, "pres",    data.pressure);
-    cJSON_AddNumberToObject(root, "gas",     data.gas_resistance);
 
     // --- PMS5003 ---
     cJSON_AddNumberToObject(root, "pm1",     data.pm1_0);
@@ -394,6 +400,7 @@ size_t NetworkManager::buildJson(const AirData &data, char *out, size_t out_sz) 
     cJSON_AddNumberToObject(root, "aqi_cat",     data.pms5003_ready ? (double)data.aqi_category : -1.0);
     cJSON_AddNumberToObject(root, "comfort",     data.comfort_index);
     cJSON_AddNumberToObject(root, "comfort_cat", data.bme680_ready ? (double)data.comfort_category : -1.0);
+    cJSON_AddNumberToObject(root, "co2_cat",     data.mq135_ready ? (double)data.co2_category : -1.0);
 
     // --- Trạng thái sẵn sàng cảm biến ---
     cJSON_AddBoolToObject(root, "bme680_ok",  data.bme680_ready);

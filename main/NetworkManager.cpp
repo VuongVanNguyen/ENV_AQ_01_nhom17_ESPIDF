@@ -366,6 +366,10 @@ void NetworkManager::dispatchCommand(const char *cmd) {
 // JSON builder — cJSON_PrintPreallocated: không alloc heap động
 // ============================================================
 size_t NetworkManager::buildJson(const AirData &data, const char *msg_type, char *out, size_t out_sz) {
+    static const char *AQI_LABELS[]     = {"Tốt", "Trung bình", "Kém", "Xấu", "Rất xấu", "Nguy hại"};
+    static const char *COMFORT_LABELS[] = {"Dễ chịu", "Hơi nóng", "Nóng khó chịu", "Rất khó chịu", "Stress nhiệt", "Cấp cứu"};
+    static const char *CO2_LABELS[]     = {"Tốt", "Trung bình", "Xấu"};
+
     cJSON *root = cJSON_CreateObject();
     if (!root) return 0;  // heap cạn kiệt — caller log và xử lý
 
@@ -397,10 +401,14 @@ size_t NetworkManager::buildJson(const AirData &data, const char *msg_type, char
 
     // --- Chỉ số tính toán (DataFusion) ---
     cJSON_AddNumberToObject(root, "aqi",         data.aqi);
-    cJSON_AddNumberToObject(root, "aqi_cat",     data.pms5003_ready ? (double)data.aqi_category : -1.0);
     cJSON_AddNumberToObject(root, "comfort",     data.comfort_index);
-    cJSON_AddNumberToObject(root, "comfort_cat", data.bme680_ready ? (double)data.comfort_category : -1.0);
-    cJSON_AddNumberToObject(root, "co2_cat",     data.mq135_ready ? (double)data.co2_category : -1.0);
+
+    if (data.pms5003_ready && data.aqi_category < 6)
+        cJSON_AddStringToObject(root, "aqi_cat",     AQI_LABELS[data.aqi_category]);
+    if (data.bme680_ready && data.comfort_category < 6)
+        cJSON_AddStringToObject(root, "comfort_cat", COMFORT_LABELS[data.comfort_category]);
+    if (data.mq135_ready && data.co2_category < 3)
+        cJSON_AddStringToObject(root, "co2_cat",     CO2_LABELS[data.co2_category]);
 
     // --- Trạng thái sẵn sàng cảm biến ---
     cJSON_AddBoolToObject(root, "bme680_ok",  data.bme680_ready);

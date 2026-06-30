@@ -424,7 +424,7 @@ const char *StorageHelper::eventTypeName(EventType type) {
         case EventType::SYSTEM_BOOT:            return "SYSTEM_BOOT";
         case EventType::SD_LOG_ROTATED:         return "SD_LOG_ROTATED";
         case EventType::ALERT_LATENCY_EXCEEDED: return "ALERT_LATENCY_EXCEEDED";
-        case EventType::WARMUP_DISPLAY_SKIPPED: return "WARMUP_DISPLAY_SKIPPED";
+        case EventType::WARMUP_SKIPPED:         return "WARMUP_SKIPPED";
     }
     return "UNKNOWN";
 }

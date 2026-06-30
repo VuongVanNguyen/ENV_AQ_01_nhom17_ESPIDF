@@ -156,16 +156,7 @@ void DisplayManager::update(const AirData &data) {
 }
 
 void DisplayManager::evaluateState(const AirData &data) {
-    // Cờ skip_warmup_display tự vô hiệu ngay khi cả 3 cảm biến đã ready thật —
-    // không cần lệnh tắt riêng (xem setForceSkipWarmupDisplay()).
-    if (force_skip_warmup_display_ &&
-        data.bme680_ready && data.pms5003_ready && data.mq135_ready) {
-        force_skip_warmup_display_ = false;
-    }
-
-    if (!data.bme680_ready && !data.pms5003_ready && !data.mq135_ready &&
-        !force_skip_warmup_display_) {
-        // Chưa cảm biến nào ready (mới boot) — chưa có gì để hiển thị.
+    if (!data.bme680_ready && !data.pms5003_ready && !data.mq135_ready) {
         current_state_ = DisplayState::WARMING_UP;
     } else {
         current_state_ = DisplayState::NORMAL;
@@ -211,7 +202,7 @@ void DisplayManager::renderToShadow(const AirData &data) {
     switch (current_page_) {
         case ScreenPage::MAIN_AQI_CI:
             {
-                if (data.pms5003_ready || force_skip_warmup_display_) {
+                if (data.pms5003_ready) {
                     const char* aqi_labels[] = {"Good", "Fair", "Poor", "Bad", "VeryBad", "Hazard"};
                     uint8_t aqi_cat = (data.aqi_category <= 5) ? data.aqi_category : 5;
                     snprintf(shadow_[0], 17, "AQI:%03d %s", (int)lroundf(data.aqi), aqi_labels[aqi_cat]);
@@ -219,7 +210,7 @@ void DisplayManager::renderToShadow(const AirData &data) {
                     snprintf(shadow_[0], 17, "AQI: WARMING UP");
                 }
 
-                if (data.bme680_ready || force_skip_warmup_display_) {
+                if (data.bme680_ready) {
                     // Nhãn CI: data.comfort_category đã được DataFusion phân loại
                     // theo thang Thom DI 6 mức (config.hpp §14) — Display chỉ map số→nhãn.
                     const char* ci_labels[] = {"Good", "S.Hot", "Hot", "V.Hot", "Stress", "Danger"};
@@ -233,7 +224,7 @@ void DisplayManager::renderToShadow(const AirData &data) {
 
         case ScreenPage::MAIN_CO2_PM:
             {
-                if (data.mq135_ready || force_skip_warmup_display_) {
+                if (data.mq135_ready) {
                     // co2_category đã được DataFusion phân loại (config.hpp §9) — Display chỉ map số→nhãn.
                     const char* co2_labels[] = {"OK", "Mod", "Bad"};
                     uint8_t co2_cat = (data.co2_category <= 2) ? data.co2_category : 2;
@@ -242,7 +233,7 @@ void DisplayManager::renderToShadow(const AirData &data) {
                     snprintf(shadow_[0], 17, "CO2: WARMING UP");
                 }
 
-                if (data.pms5003_ready || force_skip_warmup_display_) {
+                if (data.pms5003_ready) {
                     snprintf(shadow_[1], 17, "P25:%03d P10:%03d", (unsigned int)data.pm2_5 % 1000, (unsigned int)data.pm10 % 1000);
                 } else {
                     snprintf(shadow_[1], 17, "PM: WARMING UP");
@@ -251,7 +242,7 @@ void DisplayManager::renderToShadow(const AirData &data) {
             break;
 
         case ScreenPage::DETAIL:
-            if (data.bme680_ready || force_skip_warmup_display_) {
+            if (data.bme680_ready) {
                 // Độ rộng cố định: %5.1f cho temperature (dải sanity -40.0..85.0
                 // → tối đa "-40.0" = 5 ký tự) và %3d cho humidity (dải sanity
                 // 0..100 → tối đa "100" = 3 ký tự). Tổng = 16 ký tự cho mọi giá
@@ -329,6 +320,3 @@ void DisplayManager::setBacklight(bool on) {
     hd44780_switch_backlight(&lcd_, on);
 } //Có thể bỏ nếu ko dùng đến, hiện tại chưa có caller nào (dead code) — xem [XM-6] trong header.
 
-void DisplayManager::setForceSkipWarmupDisplay(bool on) {
-    force_skip_warmup_display_ = on;
-}

@@ -275,7 +275,7 @@ inline constexpr const char *MQTT_TOPIC_DATA   = CONFIG_MQTT_TOPIC;
 inline constexpr const char *MQTT_TOPIC_CMD    = CONFIG_MQTT_TOPIC_CMD;  // subscribe — nhận lệnh từ broker
 inline constexpr const char *MQTT_ACCESS_TOKEN = CONFIG_MQTT_ACCESS_TOKEN;  // username MQTT (rỗng nếu broker không cần auth)
 inline constexpr const char *NTP_SERVER_URL    = CONFIG_NTP_SERVER_URL;  // SNTP server
-inline constexpr int         MQTT_JSON_BUF_LEN = 512;   // Byte — đủ cho toàn bộ AirData
+inline constexpr int         MQTT_JSON_BUF_LEN = 640;   // Byte — đủ cho toàn bộ AirData + 3 category string fields
 
 // ============================================================
 // 12. BỘ LỌC NHIỄU (Filters) — EMA/SMA hai tầng (CLAUDE.md Mục 7)

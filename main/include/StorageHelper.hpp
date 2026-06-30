@@ -39,9 +39,9 @@ public:
         ALERT_LATENCY_EXCEEDED = 8, // alert_latency_ms > Cfg::ALERT_MAX_LATENCY_MS
                                     // (taskNetwork/main.cpp đo, snapshot.alert_reason
                                     // cho biết alert nào bị trễ — CLAUDE.md §3)
-        WARMUP_DISPLAY_SKIPPED = 9, // lệnh MQTT "skip_warmup_display" — CHỈ ảnh hưởng
-                                    // hiển thị LCD (DisplayManager), KHÔNG bypass cờ
-                                    // *_ready dùng cho AQI/Drift/Alert/baseline.
+        WARMUP_SKIPPED = 9,         // lệnh MQTT "skip_warmup" — force *_ready = true
+                                    // toàn pipeline (LCD + DataFusion + MQTT dashboard)
+                                    // khi sensor vật lý đã warm nhưng timer bị reset.
     };
 
     StorageHelper();

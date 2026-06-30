@@ -51,15 +51,6 @@ public:
     // Tiết kiệm năng lượng: Bật/tắt đèn nền LCD.
     void setBacklight(bool on);
 
-    // Lệnh MQTT "skip_warmup_display" (main.cpp, qua hàng đợi length-1 —
-    // CHỈ taskDisplay được gọi hàm này, giữ nguyên tắc "1 task chạm s_display"
-    // như XM-15). CHỈ ảnh hưởng quyết định hiển thị: khi on=true, LCD hiện số
-    // liệu thật ngay thay vì "WARMING UP", dù *_ready vẫn false. KHÔNG đụng tới
-    // data.bme680_ready/pms5003_ready/mq135_ready — AQI/Drift/Alert/baseline ở
-    // DataFusion vẫn chờ warmup thật theo CLAUDE.md §3 (sai số ≤10%). Cờ tự tắt
-    // (evaluateState()) ngay khi cả 3 cảm biến đã ready thật — không cần lệnh tắt.
-    void setForceSkipWarmupDisplay(bool on);
-
     // Các hàm getter phục vụ debug qua JTAG
     ScreenPage currentPage() const { return current_page_; }
     DisplayState currentState() const { return current_state_; }
@@ -87,10 +78,6 @@ private:
     // trước khi update() được phép vẽ lại frame trạng thái bình thường.
     bool overlay_active_;
     int64_t overlay_expire_us_;
-
-    // true sau lệnh MQTT "skip_warmup_display" — xem setForceSkipWarmupDisplay().
-    // Tự về false ngay khi cả 3 cảm biến ready thật (evaluateState()).
-    bool force_skip_warmup_display_ = false;
 
     // Callback ghi I2C bắt buộc phải có để truyền cho hd44780_init
     static esp_err_t write_cb(const hd44780_t *lcd, uint8_t data);

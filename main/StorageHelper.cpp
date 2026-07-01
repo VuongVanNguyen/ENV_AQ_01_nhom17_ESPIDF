@@ -1,19 +1,5 @@
 #include "StorageHelper.hpp"
 
-// ============================================================
-// QUAN TRỌNG — Yêu cầu đề bài §4 (Data Persistence):
-//
-// Khi đọc/ghi last_calib_timestamp từ NVS (nvs_get_i64 / nvs_set_i64):
-//   - Giá trị phải là Unix time (giây) để tính chu kỳ 30 ngày đúng qua reboot.
-//   - Nếu SNTP chưa sync lúc ghi, dùng esp_timer_get_time() / 1000000LL làm
-//     fallback — nhưng giá trị này sẽ không hợp lệ sau reboot (reset về 0).
-//   - Khi đọc lại từ NVS sau reboot: nếu giá trị đọc được < 1577836800
-//     (ngưỡng 1/1/2020), coi là fallback cũ → trigger calib_needed ngay,
-//     không tính chu kỳ 30 ngày.
-//
-// Key NVS: Cfg::NVS_KEY_LAST_CALIB_TS, namespace: Cfg::NVS_NAMESPACE (config.hpp)
-// ============================================================
-
 #include "esp_log.h"
 #include "esp_vfs_fat.h"
 #include "driver/sdspi_host.h"
@@ -28,11 +14,8 @@
 
 static const char *TAG = "StorageHelper";
 
-// Ngưỡng 1/1/2020 00:00:00 UTC — dùng để phân biệt Unix time thật với
-// giây-từ-boot (StorageHelper.hpp §7, đồng nhất với DataFusion.cpp).
 static constexpr int64_t kY2020Epoch = 1577836800;
 
-// ---- CSV headers (§3.2 / §4.2) — thứ tự cột CỐ ĐỊNH ----
 static constexpr const char *kDataHeader =
     "timestamp,time_valid,temperature,humidity,pressure,"
     "pm1_0,pm2_5,pm10,co2_ppm,aqi,aqi_category,"
@@ -44,9 +27,6 @@ static constexpr const char *kEventHeader =
     "timestamp,time_valid,event,alert_level,alert_reason,alert_flags,"
     "calib_needed,calib_reason\n";
 
-// ---- StorageMsg — truyền qua storage_queue_ (§6.1) ----
-// AirData được truyền BẢN COPY (by value) — KHÔNG con trỏ tới shared_data
-// của pipeline (tránh data race [XM-7/9]).
 enum class MsgKind : uint8_t { DATA, EVENT, OFFLINE_PUSH, OFFLINE_DRAIN };
 
 struct StorageMsg {
@@ -55,19 +35,12 @@ struct StorageMsg {
     AirData   payload;
 };
 
-// ---- Header nhị phân SD_OFFLINE_QUEUE (§5.1) ----
 struct OfflineFileHeader {
     uint32_t magic;
     uint16_t version;
     uint16_t reserved;
 };
 
-// ============================================================
-// Tiện ích file-scope
-// ============================================================
-
-// In float với độ chính xác cố định (§3.3); SENTINEL NAN -> ô rỗng (KHÔNG
-// bịa 0.0 — StorageHelper.hpp §3.3/§10).
 static void fmtFloat(float v, int prec, char *buf, size_t n) {
     if (!std::isfinite(v)) {
         buf[0] = '\0';
@@ -76,8 +49,6 @@ static void fmtFloat(float v, int prec, char *buf, size_t n) {
     }
 }
 
-// Suy ra đường dẫn file xoay vòng airdata.<n>.csv từ Cfg::SD_LOG_FILE
-// ("/sdcard/airdata.csv" -> "/sdcard/airdata.<n>.csv"), §3.6.
 static void rotatedPath(char *out, size_t out_sz, int n) {
     const char *base = Cfg::SD_LOG_FILE;
     const char *ext = strrchr(base, '.');
@@ -87,9 +58,6 @@ static void rotatedPath(char *out, size_t out_sz, int n) {
              ext ? ext : "");
 }
 
-// ============================================================
-// Constructor / Destructor
-// ============================================================
 StorageHelper::StorageHelper()
     : card_(nullptr),
       storage_queue_(nullptr),
@@ -116,9 +84,6 @@ StorageHelper::~StorageHelper() {
     }
 }
 
-// ============================================================
-// init() — §1
-// ============================================================
 esp_err_t StorageHelper::init() {
     storage_queue_ = xQueueCreate(Cfg::STORAGE_QUEUE_LEN, sizeof(StorageMsg));
     if (!storage_queue_) {
@@ -135,11 +100,9 @@ esp_err_t StorageHelper::init() {
         mounted_ = true;
         sdmmc_card_print_info(stdout, card_);
 
-        // §3.2 / §4.2 — ghi header nếu file mới
         ensureHeader(Cfg::SD_LOG_FILE, kDataHeader, data_file_bytes_);
         ensureHeader(Cfg::SD_EVENT_LOG_FILE, kEventHeader, event_file_bytes_);
 
-        // §5.4 — khôi phục offline queue tồn dư từ phiên trước
         restoreOfflineState();
 
         ESP_LOGI(TAG,
@@ -160,12 +123,8 @@ esp_err_t StorageHelper::init() {
     return mounted_ ? ESP_OK : ESP_FAIL;
 }
 
-// ============================================================
-// Mount thẻ SD qua SPI — §2
-// ============================================================
 esp_err_t StorageHelper::mountCard() {
-    // §2.1 — spi_bus_initialize trên SPI2_HOST (Cfg::SD_SPI_HOST), KHÔNG
-    // xung đột I2C (I2C_NUM_0), UART2 (PMS5003) hay ADC1 (MQ135).
+
     spi_bus_config_t bus_cfg = {};
     bus_cfg.mosi_io_num = Cfg::SD_SPI_MOSI_PIN;
     bus_cfg.miso_io_num = Cfg::SD_SPI_MISO_PIN;
@@ -182,7 +141,6 @@ esp_err_t StorageHelper::mountCard() {
         return err;
     }
 
-    // §2.2 — sdspi_device_config_t: CS pin + host id
     sdspi_device_config_t dev_cfg = SDSPI_DEVICE_CONFIG_DEFAULT();
     dev_cfg.gpio_cs = static_cast<gpio_num_t>(Cfg::SD_SPI_CS_PIN);
     dev_cfg.host_id = static_cast<spi_host_device_t>(Cfg::SD_SPI_HOST);
@@ -190,14 +148,11 @@ esp_err_t StorageHelper::mountCard() {
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.slot = Cfg::SD_SPI_HOST;
 
-    // §2.3 — format_if_mount_failed=false (KHÔNG tự format thẻ người dùng);
-    // max_files đủ cho airdata.csv + events.csv + offline_queue.bin/.hdr.
     esp_vfs_fat_sdmmc_mount_config_t mount_cfg = {};
     mount_cfg.format_if_mount_failed = false;
     mount_cfg.max_files = Cfg::SD_MAX_OPEN_FILES;
     mount_cfg.allocation_unit_size = 16 * 1024;
 
-    // §2.4 — KHÔNG ESP_ERROR_CHECK: thiếu thẻ không được làm sập hệ thống.
     err = esp_vfs_fat_sdspi_mount(Cfg::SD_MOUNT_POINT, &host, &dev_cfg,
                                    &mount_cfg, &card_);
     if (err != ESP_OK) {
@@ -209,9 +164,6 @@ esp_err_t StorageHelper::mountCard() {
     return ESP_OK;
 }
 
-// ============================================================
-// CSV: ensureHeader — §3.2 / §4.2
-// ============================================================
 esp_err_t StorageHelper::ensureHeader(const char *path, const char *header,
                                        long &size_out) {
     struct stat st {};
@@ -238,16 +190,9 @@ esp_err_t StorageHelper::ensureHeader(const char *path, const char *header,
     return ESP_OK;
 }
 
-// ============================================================
-// §3 — LOG DỮ LIỆU ĐỊNH KỲ (CSV)
-// ============================================================
 esp_err_t StorageHelper::writeDataRow(const AirData &data) {
     if (!mounted_) return ESP_ERR_INVALID_STATE;
 
-    // §3.1 — nhịp ghi: taskStorage tự đếm nhịp theo AirData::timestamp, KHÔNG
-    // phụ thuộc cadence gọi logData() từ pipeline/caller. Bỏ qua (không phải
-    // lỗi) nếu chưa đủ Cfg::SD_LOG_INTERVAL_MS từ dòng trước; mẫu đầu tiên
-    // (last_log_timestamp_==0) luôn được ghi ngay.
     if (last_log_timestamp_ != 0) {
         int64_t delta_ms = (data.timestamp - last_log_timestamp_) * 1000;
         if (delta_ms < static_cast<int64_t>(Cfg::SD_LOG_INTERVAL_MS)) {
@@ -255,7 +200,6 @@ esp_err_t StorageHelper::writeDataRow(const AirData &data) {
         }
     }
 
-    // §3.3 — float in cố định số lẻ; NAN (sentinel chưa ready) -> ô rỗng.
     char t_buf[16], h_buf[16], p_buf[16], co2_buf[16], aqi_buf[16], ci_buf[16];
     fmtFloat(data.temperature, 2, t_buf, sizeof(t_buf));
     fmtFloat(data.humidity, 2, h_buf, sizeof(h_buf));
@@ -264,25 +208,16 @@ esp_err_t StorageHelper::writeDataRow(const AirData &data) {
     fmtFloat(data.aqi, 1, aqi_buf, sizeof(aqi_buf));
     fmtFloat(data.comfort_index, 2, ci_buf, sizeof(ci_buf));
 
-    // §3.4 — CSV-safe escape cho 2 trường chuỗi
     char alert_reason_esc[48], calib_reason_esc[48];
     csvEscape(data.alert_reason, alert_reason_esc, sizeof(alert_reason_esc));
     csvEscape(data.calib_reason, calib_reason_esc, sizeof(calib_reason_esc));
 
-    // §10 — chính sách data_valid=false: VẪN ghi 1 dòng (cột data_valid=0)
-    // để không "mất mẫu im lặng" — KHÔNG bỏ qua cycle lỗi.
     FILE *f = fopen(Cfg::SD_LOG_FILE, "a");
     if (!f) {
         ESP_LOGE(TAG, "Không thể mở %s để ghi", Cfg::SD_LOG_FILE);
         return ESP_FAIL;
     }
 
-    // Thứ tự cột khớp kDataHeader (§3.2):
-    //   timestamp,time_valid,temperature,humidity,pressure,
-    //   pm1_0,pm2_5,pm10,co2_ppm,aqi,aqi_category,
-    //   comfort_index,comfort_category,co2_category,alert_level,alert_reason,
-    //   alert_flags,calib_needed,calib_reason,
-    //   bme680_ready,pms5003_ready,mq135_ready,data_valid,cycle_time_ms
     int n = fprintf(
         f,
         "%lld,%d,%s,%s,%s,"
@@ -311,7 +246,6 @@ esp_err_t StorageHelper::writeDataRow(const AirData &data) {
     data_file_bytes_ += n;
     last_log_timestamp_ = data.timestamp;
 
-    // §3.5 — fsync sau mỗi Cfg::SD_FSYNC_EVERY_N_ROWS dòng
     data_rows_pending_fsync_++;
     if (data_rows_pending_fsync_ >= Cfg::SD_FSYNC_EVERY_N_ROWS) {
         fflush(f);
@@ -320,7 +254,6 @@ esp_err_t StorageHelper::writeDataRow(const AirData &data) {
     }
     fclose(f);
 
-    // §3.6 — xoay vòng nếu vượt SD_LOG_MAX_BYTES
     if (data_file_bytes_ >= Cfg::SD_LOG_MAX_BYTES) {
         rotateDataLog(data);
     }
@@ -328,18 +261,16 @@ esp_err_t StorageHelper::writeDataRow(const AirData &data) {
     return ESP_OK;
 }
 
-// §3.6 — xoay vòng airdata.csv: dồn airdata.<i>.csv -> airdata.<i+1>.csv,
-// xoá bản cũ nhất (giữ tối đa Cfg::SD_LOG_MAX_FILES bản).
 esp_err_t StorageHelper::rotateDataLog(const AirData &data) {
     char oldest[80], src[80], dst[80];
 
     rotatedPath(oldest, sizeof(oldest), Cfg::SD_LOG_MAX_FILES - 1);
-    remove(oldest);  // bỏ qua lỗi — có thể chưa tồn tại
+    remove(oldest);
 
     for (int i = Cfg::SD_LOG_MAX_FILES - 2; i >= 1; --i) {
         rotatedPath(src, sizeof(src), i);
         rotatedPath(dst, sizeof(dst), i + 1);
-        rename(src, dst);  // bỏ qua lỗi — có thể chưa tồn tại
+        rename(src, dst);
     }
 
     rotatedPath(dst, sizeof(dst), 1);
@@ -355,15 +286,11 @@ esp_err_t StorageHelper::rotateDataLog(const AirData &data) {
     ESP_LOGI(TAG, "SD_LOG_FILE rotated (> %ld B) -> %s",
              static_cast<long>(Cfg::SD_LOG_MAX_BYTES), dst);
 
-    // Event Log §4.1 — SD_LOG_ROTATED (ghi trực tiếp, đang ở trong storageTask)
     writeEventRow(EventType::SD_LOG_ROTATED, data);
 
     return err;
 }
 
-// ============================================================
-// §4 — EVENT LOG (rời rạc)
-// ============================================================
 esp_err_t StorageHelper::writeEventRow(EventType type,
                                         const AirData &snapshot) {
     if (!mounted_) return ESP_ERR_INVALID_STATE;
@@ -378,9 +305,6 @@ esp_err_t StorageHelper::writeEventRow(EventType type,
         return ESP_FAIL;
     }
 
-    // Thứ tự cột khớp kEventHeader (§4.2):
-    //   timestamp,time_valid,event,alert_level,alert_reason,alert_flags,
-    //   calib_needed,calib_reason
     int n = fprintf(f, "%lld,%d,%s,%u,%s,0x%04X,%d,%s\n",
                     static_cast<long long>(snapshot.timestamp),
                     timeValidOf(snapshot.timestamp), eventTypeName(type),
@@ -395,7 +319,6 @@ esp_err_t StorageHelper::writeEventRow(EventType type,
         return ESP_FAIL;
     }
 
-    // §4.5 — fsync mỗi dòng (mật độ thấp, ưu tiên an toàn)
     fflush(f);
     fsync(fileno(f));
     fclose(f);
@@ -429,17 +352,12 @@ const char *StorageHelper::eventTypeName(EventType type) {
     return "UNKNOWN";
 }
 
-// ============================================================
-// §5 — OFFLINE BUFFER (hàng đợi nhị phân bền vững trên SD)
-// ============================================================
-
-// §5.2 — append record + drop-oldest khi vượt OFFLINE_QUEUE_MAX_RECORDS.
 esp_err_t StorageHelper::pushOfflineRecord(const AirData &data) {
     if (!mounted_) return ESP_ERR_INVALID_STATE;
 
     struct stat st {};
     if (stat(Cfg::SD_OFFLINE_QUEUE, &st) != 0 || st.st_size == 0) {
-        // §5.1 — tạo file mới với MAGIC+VERSION header
+
         FILE *hf = fopen(Cfg::SD_OFFLINE_QUEUE, "wb");
         if (!hf) {
             ESP_LOGE(TAG, "Không thể tạo %s", Cfg::SD_OFFLINE_QUEUE);
@@ -472,7 +390,7 @@ esp_err_t StorageHelper::pushOfflineRecord(const AirData &data) {
     offline_count_++;
 
     if (offline_count_ > Cfg::OFFLINE_QUEUE_MAX_RECORDS) {
-        // Hết chỗ: drop record CŨ NHẤT (head++) — §5.2
+
         uint32_t head = 0;
         esp_err_t read_err = readOfflineHead(head);
         if (read_err != ESP_OK && read_err != ESP_ERR_NOT_FOUND) {
@@ -496,14 +414,13 @@ esp_err_t StorageHelper::pushOfflineRecord(const AirData &data) {
     return ESP_OK;
 }
 
-// §5.3 — phát lại theo lô (Cfg::OFFLINE_DRAIN_BATCH), FIFO từ head.
 esp_err_t StorageHelper::drainOfflineRecords(const PublishFn &publish_fn) {
     if (!mounted_ || !publish_fn) return ESP_ERR_INVALID_STATE;
 
     struct stat st {};
     if (stat(Cfg::SD_OFFLINE_QUEUE, &st) != 0) {
         offline_count_ = 0;
-        return ESP_OK;  // queue rỗng — không có gì để drain
+        return ESP_OK;
     }
 
     long total_records =
@@ -538,11 +455,10 @@ esp_err_t StorageHelper::drainOfflineRecords(const PublishFn &publish_fn) {
         if (pub_err == ESP_OK) {
             head++;
             sent++;
-            // Nghỉ giữa các lần publish — tránh broker (rate-limit per-device)
-            // đóng kết nối khi phát cả batch liên tiếp không nghỉ.
+
             vTaskDelay(pdMS_TO_TICKS(Cfg::OFFLINE_DRAIN_PACE_MS));
         } else if (pub_err == ESP_ERR_INVALID_STATE) {
-            // Rớt mạng giữa chừng — DỪNG, giữ phần còn lại cho lần sau (§5.3)
+
             ESP_LOGW(TAG,
                      "Drain dừng giữa chừng (mất kết nối) — còn %ld record",
                      total_records - static_cast<long>(head));
@@ -556,7 +472,7 @@ esp_err_t StorageHelper::drainOfflineRecords(const PublishFn &publish_fn) {
     fclose(f);
 
     if (head >= static_cast<uint32_t>(total_records)) {
-        // §5.3 — rỗng: truncate/remove file
+
         remove(Cfg::SD_OFFLINE_QUEUE);
         remove(Cfg::SD_OFFLINE_HEAD);
         offline_count_ = 0;
@@ -570,16 +486,10 @@ esp_err_t StorageHelper::drainOfflineRecords(const PublishFn &publish_fn) {
                  static_cast<unsigned>(sent),
                  static_cast<unsigned>(offline_count_));
 
-        // §5.5 — nén file khi vùng đã-tiêu-thụ ở đầu file đủ lớn
         if (head >= Cfg::OFFLINE_DRAIN_BATCH) {
             compactOfflineQueue(head, total_records);
         }
 
-        // §5.3 — "gửi tối đa OFFLINE_DRAIN_BATCH record MỖI LƯỢT rồi yield":
-        // lô này gửi ĐỦ batch mà KHÔNG lỗi (sent==BATCH) và vẫn còn tồn
-        // (head<total) => tự enqueue OFFLINE_DRAIN cho lượt kế. Các message
-        // DATA/EVENT/OFFLINE_PUSH đang chờ trong queue được xử lý TRƯỚC
-        // (FIFO) => nhường CPU cho pipeline, không cần taskNetwork tự lặp.
         if (sent == Cfg::OFFLINE_DRAIN_BATCH) {
             StorageMsg again{};
             again.kind = MsgKind::OFFLINE_DRAIN;
@@ -590,13 +500,12 @@ esp_err_t StorageHelper::drainOfflineRecords(const PublishFn &publish_fn) {
     return ESP_OK;
 }
 
-// §5.4 — khôi phục offline_count_ sau reboot (gọi từ init khi mounted).
 esp_err_t StorageHelper::restoreOfflineState() {
     offline_count_ = 0;
 
     struct stat st {};
     if (stat(Cfg::SD_OFFLINE_QUEUE, &st) != 0) {
-        return ESP_OK;  // không có offline queue tồn dư từ phiên trước
+        return ESP_OK;
     }
 
     FILE *f = fopen(Cfg::SD_OFFLINE_QUEUE, "rb");
@@ -610,7 +519,7 @@ esp_err_t StorageHelper::restoreOfflineState() {
 
     if (n != 1 || hdr.magic != Cfg::OFFLINE_MAGIC ||
         hdr.version != Cfg::OFFLINE_FORMAT_VERSION) {
-        // §5.1 — format cũ/không tương thích: bỏ file, KHÔNG phát lại rác
+
         ESP_LOGW(TAG, "%s: MAGIC/VERSION không khớp — bỏ file cũ",
                  Cfg::SD_OFFLINE_QUEUE);
         remove(Cfg::SD_OFFLINE_QUEUE);
@@ -625,7 +534,7 @@ esp_err_t StorageHelper::restoreOfflineState() {
     if (total_records < 0) total_records = 0;
 
     uint32_t head = 0;
-    readOfflineHead(head);  // 0 nếu chưa có .hdr
+    readOfflineHead(head);
     if (head > static_cast<uint32_t>(total_records)) {
         head = static_cast<uint32_t>(total_records);
     }
@@ -656,8 +565,6 @@ esp_err_t StorageHelper::writeOfflineHead(uint32_t head_index) const {
     return (n == 1) ? ESP_OK : ESP_FAIL;
 }
 
-// §5.5 — nén file: chỉ giữ [head, total) records, ghi sang file tạm rồi
-// rename (nguyên tử) đè lên SD_OFFLINE_QUEUE; reset head=0.
 esp_err_t StorageHelper::compactOfflineQueue(uint32_t head, long total_records) {
     long remaining = total_records - static_cast<long>(head);
     if (remaining <= 0) {
@@ -694,9 +601,6 @@ esp_err_t StorageHelper::compactOfflineQueue(uint32_t head, long total_records) 
     fclose(dst);
     fclose(src);
 
-    // FatFs (f_rename() đứng sau esp_vfs_fat cho SD card) không có ngữ nghĩa
-    // POSIX tự ghi đè đích — trả FR_EXIST nếu đích đã tồn tại. SD_OFFLINE_QUEUE
-    // luôn tồn tại tại thời điểm nén nên phải xoá đích trước khi rename().
     remove(Cfg::SD_OFFLINE_QUEUE);
     if (rename(tmp_path, Cfg::SD_OFFLINE_QUEUE) != 0) {
         ESP_LOGW(TAG, "Compact: rename %s -> %s lỗi (errno=%d)", tmp_path,
@@ -709,9 +613,6 @@ esp_err_t StorageHelper::compactOfflineQueue(uint32_t head, long total_records) 
     return ESP_OK;
 }
 
-// ============================================================
-// API public — chỉ enqueue, non-blocking (§6.4)
-// ============================================================
 esp_err_t StorageHelper::logData(const AirData &data) {
     if (!mounted_) {
         dropped_data_++;
@@ -791,11 +692,6 @@ esp_err_t StorageHelper::bufferOffline(const AirData &data) {
 esp_err_t StorageHelper::drainOffline(PublishFn publish_fn) {
     if (!mounted_ || !publish_fn) return ESP_ERR_INVALID_STATE;
 
-    // Lưu publish_fn cho storageTask đọc khi xử lý OFFLINE_DRAIN (§5.3).
-    // Giả định: publish_fn luôn là wrapper gọi NetworkManager::publishData
-    // trên CÙNG một NetworkManager instance — ghi đè bởi lần gọi sau (nếu
-    // taskNetwork reconnect liên tiếp trước khi storageTask kịp xử lý) vẫn
-    // tương đương về hành vi.
     drain_publish_fn_ = publish_fn;
 
     StorageMsg msg{};
@@ -812,9 +708,6 @@ bool StorageHelper::isMounted() const { return mounted_; }
 
 size_t StorageHelper::offlineCount() const { return offline_count_; }
 
-// ============================================================
-// §6 — storageTask: NƠI DUY NHẤT chạm fopen/fwrite/fsync
-// ============================================================
 void StorageHelper::taskStorage(void *arg) {
     static_cast<StorageHelper *>(arg)->taskLoop();
 }
@@ -822,8 +715,7 @@ void StorageHelper::taskStorage(void *arg) {
 void StorageHelper::taskLoop() {
     StorageMsg msg;
     for (;;) {
-        // §6.3 — blocking chờ việc: cơ chế đồng bộ hợp lệ, KHÔNG phải
-        // vTaskDelay timing nghiệp vụ (CLAUDE.md §4).
+
         if (xQueueReceive(storage_queue_, &msg, portMAX_DELAY) != pdTRUE) {
             continue;
         }
@@ -845,12 +737,6 @@ void StorageHelper::taskLoop() {
     }
 }
 
-// ============================================================
-// Tiện ích chung — §3.4 (CSV-safe) / §7 (time_valid)
-// ============================================================
-
-// §3.4 — thay thế ký tự phá vỡ cấu trúc CSV: ',' -> ';', '"' -> '\'',
-// '\n'/'\r' -> ' '.
 size_t StorageHelper::csvEscape(const char *in, char *out, size_t out_sz) {
     if (out_sz == 0) return 0;
     size_t j = 0;
@@ -868,8 +754,6 @@ size_t StorageHelper::csvEscape(const char *in, char *out, size_t out_sz) {
     return j;
 }
 
-// §7 — timestamp < 1/1/2020 => giây-từ-boot (time_valid=0), else Unix time
-// thật (time_valid=1).
 int StorageHelper::timeValidOf(int64_t timestamp) {
     return (timestamp < kY2020Epoch) ? 0 : 1;
 }

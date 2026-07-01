@@ -145,13 +145,6 @@ esp_err_t DataFusion::confirmRecalibration(AirData &data, bool time_synced) {
     }
     setReason(kNoCalibReason);
 
-    // Hành động chủ động của người dùng → luôn cập nhật mốc 30 ngày,
-    // khác với initializeBaselineGroup (chỉ set mốc ở lần baseline đầu tiên).
-    // GHI NVS ĐỒNG BỘ tại đây là hợp lệ: confirmRecalibration chạy trong task sự
-    // kiện MQTT (ngoài pipeline ≤300ms, không bị TWDT giám sát) — nvs_commit ~100ms
-    // chấp nhận được, đổi lại giữ nguyên ngữ nghĩa trả lỗi flash đồng bộ cho người
-    // dùng. Bản ghi này đã persist TOÀN BỘ baseline_ RAM (gồm cả nhóm baseline-init
-    // còn dirty nếu có) → xoá baseline_dirty_ để persistBaselineIfDirty() khỏi ghi lại.
     esp_err_t err = saveBaseline(now);
     if (err == ESP_OK) {
         baseline_dirty_ = false;
@@ -289,8 +282,6 @@ esp_err_t DataFusion::loadBaseline() {
     return ESP_OK;
 }
 
-// Wrapper ghi từ baseline_ hiện tại — dùng bởi confirmRecalibration (đang giữ
-// mutex_). Sau khi ghi thành công, cập nhật mốc RAM last_calib_ts_.
 esp_err_t DataFusion::saveBaseline(int64_t timestamp) {
     esp_err_t err = writeBaselineToNvs(baseline_, baseline_mask_, timestamp);
     if (err == ESP_OK) {
@@ -299,9 +290,6 @@ esp_err_t DataFusion::saveBaseline(int64_t timestamp) {
     return err;
 }
 
-// Thân ghi NVS thuần — nhận baseline/mask/ts qua tham số, KHÔNG cập nhật member
-// last_calib_ts_ (caller lo). Mọi caller gọi khi ĐANG giữ mutex_ (saveBaseline
-// trong confirmRecalibration, và persistBaselineIfDirty). Một commit cho tất cả.
 esp_err_t DataFusion::writeBaselineToNvs(const Baseline &bl, uint8_t mask, int64_t timestamp) {
     if (!nvs_handle_) {
         return ESP_ERR_INVALID_STATE;
@@ -361,13 +349,6 @@ esp_err_t DataFusion::writeBaselineToNvs(const Baseline &bl, uint8_t mask, int64
     return ESP_OK;
 }
 
-// persistBaselineIfDirty — gọi từ task ưu tiên thấp (main.cpp). Giữ mutex_ suốt
-// thao tác ghi để SERIALIZE với confirmRecalibration (cũng ghi NVS dưới mutex_):
-// tránh race ghi đè baseline/timestamp cũ hơn lên mới hơn. baseline_dirty_ CHỈ
-// được bật bởi baseline-init lúc boot (confirmRecalibration ghi đồng bộ + xoá
-// dirty, không bật) → steady-state hàm này trả về sớm, KHÔNG ôm mutex lâu, nên
-// không gây trễ confirmRecalibration ngoài cửa sổ boot ngắn. Lỗi flash → giữ
-// dirty để thử lại lượt sau (không "âm thầm" mất baseline — CLAUDE.md §4).
 esp_err_t DataFusion::persistBaselineIfDirty() {
     if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(100)) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
@@ -421,16 +402,10 @@ void DataFusion::initializeBaselineGroup(uint8_t group_bit, const AirData &data,
             break;
     }
 
-    // Nhóm baseline ĐẦU TIÊN bao giờ (mask 0 → non-zero) đặt mốc 30 ngày;
-    // các nhóm chốt sau giữ nguyên last_calib_ts_ (xem DataFusion.hpp §6.5).
     const int64_t ts = (baseline_mask_ == 0) ? getNow(time_synced) : last_calib_ts_;
     baseline_mask_ |= group_bit;
     setReason(kNoCalibReason);
 
-    // KHÔNG ghi NVS tại đây (chạy trong process() → pipeline ≤300ms, CLAUDE.md
-    // §3/§4): chỉ chốt baseline + mốc vào RAM (đủ cho driftSelfCheck/30 ngày của
-    // chu kỳ kế) và bật cờ dirty. nvs_commit chậm được persistBaselineIfDirty()
-    // ở task ưu tiên thấp thực hiện sau.
     last_calib_ts_    = ts;
     pending_calib_ts_ = ts;
     baseline_dirty_   = true;
@@ -520,10 +495,6 @@ void DataFusion::driftSelfCheck(AirData &data, bool time_synced) {
     data.calib_needed = false;
     setReason(kNoCalibReason);
 
-    // Snapshot baseline_/baseline_mask_/last_calib_ts_ dưới mutex_ — các trường
-    // này cũng được confirmRecalibration() ghi đồng thời từ task sự kiện MQTT
-    // (DataFusion.hpp §12). Không giữ mutex_ suốt phần tính toán phía dưới để
-    // tránh nghẽn confirmRecalibration/persistBaselineIfDirty (chạy task khác).
     if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(100)) != pdTRUE) {
         ESP_LOGW(TAG, "driftSelfCheck: không lấy được mutex_, bỏ qua chu kỳ này");
         return;
@@ -614,10 +585,7 @@ void DataFusion::driftSelfCheck(AirData &data, bool time_synced) {
 }
 
 void DataFusion::computeAlertLevel(AirData &data) {
-    // last_alert_level_/alert_level_changed_us_/last_calib_reason_ được taskSensor
-    // (process()) VÀ task MQTT (confirmRecalibration()) cùng chạm — khóa mutex_
-    // (đã dùng cho baseline_, DataFusion.hpp §12) để tránh race giữa 2 task.
-    // Hàm thuần tính toán O(1), không I/O nên giữ mutex_ suốt hàm là chấp nhận được.
+
     if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(100)) != pdTRUE) {
         ESP_LOGW(TAG, "computeAlertLevel: không lấy được mutex_, bỏ qua chu kỳ này");
         return;
@@ -627,8 +595,6 @@ void DataFusion::computeAlertLevel(AirData &data) {
     const char *reason = kNoAlertReason;
     uint16_t flags = 0;
 
-    // Chỉ nâng (level, reason) khi mức mới NGHIÊM TRỌNG HƠN mức hiện tại —
-    // giữ lý do của điều kiện CRITICAL/WARNING đầu tiên đạt mức cao nhất.
     auto consider = [&](AlertLevel candidate, const char *candidate_reason) {
         if (candidate > level) {
             level = candidate;
@@ -661,10 +627,6 @@ void DataFusion::computeAlertLevel(AirData &data) {
             flags |= FLAG_CO2_WARNING;
         }
 
-        // calib_needed chỉ nâng alert_level lên WARNING — nếu AQI/Comfort/CO2
-        // đã đạt CRITICAL ở trên, alert_reason giữ lý do CRITICAL đó. Lý do
-        // drift cụ thể không bị mất: được ghi riêng vào data.calib_reason
-        // ngay dưới đây, độc lập với alert_reason.
         if (data.calib_needed) {
             consider(AlertLevel::WARNING, last_calib_reason_);
             flags |= FLAG_CALIB_NEEDED;
@@ -682,9 +644,6 @@ void DataFusion::computeAlertLevel(AirData &data) {
     std::strncpy(data.alert_reason, reason, sizeof(data.alert_reason) - 1);
     data.alert_reason[sizeof(data.alert_reason) - 1] = '\0';
 
-    // calib_reason ĐỘC LẬP với alert_reason — luôn phản ánh lý do drift cụ thể
-    // (CALIB_DRIFT_TEMP/PM25/.../CALIB_OVERDUE_30D) khi calib_needed=true, kể
-    // cả khi alert_reason đang mang lý do AQI/Comfort/CO2 CRITICAL khác.
     const char *calib_reason = data.calib_needed ? last_calib_reason_ : kNoCalibReason;
     std::strncpy(data.calib_reason, calib_reason, sizeof(data.calib_reason) - 1);
     data.calib_reason[sizeof(data.calib_reason) - 1] = '\0';

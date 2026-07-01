@@ -150,8 +150,27 @@ esp_err_t NetworkManager::initMqtt() {
     if (Cfg::MQTT_ACCESS_TOKEN[0] != '\0') {
         cfg.credentials.username = Cfg::MQTT_ACCESS_TOKEN;
     }
-    // Auto-reconnect mặc định 10s — đủ cho NFR cảnh báo <3s sau khi kết nối lại
+    // Auto-reconnect mặc định của esp-mqtt là 10s — tự nó đã vượt
+    // Cfg::ALERT_MAX_LATENCY_MS (3000ms) trước cả khi thử reconnect lần đầu.
+    // Rút xuống 3000ms để không tự làm hỏng NFR cảnh báo mỗi khi broker ngắt
+    // rồi có lại ngay, vẫn đủ lớn để tránh spam broker khi mất mạng thật sự.
     cfg.network.disable_auto_reconnect = false;
+    cfg.network.reconnect_timeout_ms   = 3000;
+
+    // TCP-level keep-alive — phòng trường hợp socket "chết" âm thầm (NAT/router
+    // drop mapping, không gửi FIN) mà esp-mqtt không tự biết cho tới I/O kế
+    // tiếp. Không thay thế MQTT keepalive (session.keepalive, tầng ứng dụng) —
+    // bổ sung ở tầng TCP.
+    cfg.network.tcp_keep_alive_cfg.keep_alive_enable   = true;
+    cfg.network.tcp_keep_alive_cfg.keep_alive_idle     = 20;
+    cfg.network.tcp_keep_alive_cfg.keep_alive_interval = 5;
+    cfg.network.tcp_keep_alive_cfg.keep_alive_count    = 3;
+
+    // Giới hạn outbox tường minh — mặc định thư viện (limit=0) là KHÔNG giới
+    // hạn, outbox có thể phình tới hết heap nếu mạng chập chờn kéo dài mà
+    // MQTT_EVENT_DISCONNECTED chưa kịp fire. 16KB đủ chứa ~20+ bản tin, bao
+    // trùm cửa sổ phát hiện mất kết nối xấu nhất (~35s) ở nhịp publish 2s.
+    cfg.outbox.limit = Cfg::MQTT_OUTBOX_LIMIT_BYTES;
 
     mqtt_ = esp_mqtt_client_init(&cfg);
     if (!mqtt_) return ESP_FAIL;
@@ -205,22 +224,17 @@ esp_err_t NetworkManager::publishJson(const char *msg_type, const AirData &data)
 
     char json[Cfg::MQTT_JSON_BUF_LEN];
     size_t n = buildJson(data, msg_type, json, sizeof(json));
-    if (n == 0) {
-        ESP_LOGE(TAG, "buildJson thất bại — buffer quá nhỏ hoặc heap OOM (MQTT_JSON_BUF_LEN=%d)",
-                 Cfg::MQTT_JSON_BUF_LEN);
-        return ESP_FAIL;
-    }
+    if (n == 0) return ESP_FAIL;
 
     // QoS 1: đảm bảo broker nhận ít nhất 1 lần — nếu PUBACK mất, client retransmit
     // và subscriber có thể nhận duplicate. Dedup phía subscriber bằng (ts, client_id).
-    int msg_id = esp_mqtt_client_publish(mqtt_, Cfg::MQTT_TOPIC_DATA, json,
-                                          static_cast<int>(n), 1, 0);
-    if (msg_id < 0) {
-        ESP_LOGE(TAG, "esp_mqtt_client_publish thất bại (topic='%s') — MQTT outbox đầy hoặc mất kết nối",
-                 Cfg::MQTT_TOPIC_DATA);
-        return ESP_FAIL;
-    }
-    return ESP_OK;
+    // enqueue() (không phải publish() blocking) chỉ đẩy message vào outbox nội bộ
+    // và trả về gần như ngay lập tức — việc gửi/retry thực sự do task nội bộ của
+    // thư viện esp-mqtt xử lý bất đồng bộ, tránh block taskNetwork khi TCP write
+    // không hoàn tất (rủi ro Task Watchdog trigger khi mạng chập chờn).
+    int msg_id = esp_mqtt_client_enqueue(mqtt_, Cfg::MQTT_TOPIC_DATA, json,
+                                         static_cast<int>(n), 1, 0, true);
+    return (msg_id >= 0) ? ESP_OK : ESP_FAIL;
 }
 
 bool NetworkManager::isConnected() const {
@@ -336,10 +350,13 @@ void NetworkManager::mqttEventHandler(void *arg, esp_event_base_t,
                 ESP_LOGI(TAG, "Nhận lệnh RPC từ ThingsBoard: '%s'", cmd_item->valuestring);
                 self->dispatchCommand(cmd_item->valuestring);
                 // reboot gọi esp_restart() bên trong → không bao giờ trả về đây
-                // nên response tự nhiên chỉ gửi cho các lệnh còn lại
+                // nên response tự nhiên chỉ gửi cho các lệnh còn lại. enqueue()
+                // thay vì publish() blocking — callback này chạy trong chính
+                // context của mqtt task nội bộ, blocking ở đây còn rủi ro hơn vì
+                // có thể tự nghẽn task đang lo việc gửi/nhận MQTT của chính nó.
                 char resp_topic[64];
                 snprintf(resp_topic, sizeof(resp_topic), "v1/devices/me/rpc/response/%s", request_id_buf);
-                esp_mqtt_client_publish(self->mqtt_, resp_topic, "{\"result\":\"ok\"}", 0, 1, 0);
+                esp_mqtt_client_enqueue(self->mqtt_, resp_topic, "{\"result\":\"ok\"}", 0, 1, 0, true);
             }
             cJSON_Delete(root);
             break;
@@ -347,8 +364,15 @@ void NetworkManager::mqttEventHandler(void *arg, esp_event_base_t,
 
         case MQTT_EVENT_ERROR:
             if (evt && evt->error_handle) {
-                // error_type: 0=TCP transport, 1=PAHO, 2=TLS, 3=DNS
-                ESP_LOGE(TAG, "MQTT loại lỗi=%d", (int)evt->error_handle->error_type);
+                // error_type: 0=MQTT_ERROR_TYPE_NONE, 1=MQTT_ERROR_TYPE_TCP_TRANSPORT
+                // (bao gồm cả lỗi TLS, xem alias MQTT_ERROR_TYPE_ESP_TLS),
+                // 2=MQTT_ERROR_TYPE_CONNECTION_REFUSED, 3=MQTT_ERROR_TYPE_SUBSCRIBE_FAILED
+                ESP_LOGE(TAG,
+                         "MQTT loại lỗi=%d sock_errno=%d esp_tls_last_esp_err=0x%x esp_tls_stack_err=%d",
+                         (int)evt->error_handle->error_type,
+                         evt->error_handle->esp_transport_sock_errno,
+                         (unsigned)evt->error_handle->esp_tls_last_esp_err,
+                         evt->error_handle->esp_tls_stack_err);
             }
             break;
 
@@ -392,20 +416,16 @@ size_t NetworkManager::buildJson(const AirData &data, const char *msg_type, char
 
     cJSON *root = cJSON_CreateObject();
     if (!root) return 0;
-
-    // Khi SNTP đã sync: dùng nested format {"ts": <ms>, "values": {...}}.
-    // ThingsBoard transport xử lý "ts" (ms) làm timestamp chính thức của data point —
-    // cho phép đặt timestamp chính xác khi retry/offline buffer drain và tránh
-    // lệch giờ do network latency. Transport tự trích values thành flat telemetry
-    // trước khi vào Rule Chain, nên msg trong TBEL script luôn là flat.
-    // Khi chưa sync: flat format, ThingsBoard gán server timestamp.
+    constexpr int64_t EPOCH_2020 = 1577836800LL;
     cJSON *vals;
-    if (s_sntp_synced.load()) {
-        cJSON_AddNumberToObject(root, "ts", (double)data.timestamp * 1000.0);  // giây → ms
-        vals = cJSON_AddObjectToObject(root, "values");
+    if (data.timestamp > EPOCH_2020) {
+        // ts phải là milliseconds theo ThingsBoard Telemetry API
+        cJSON_AddNumberToObject(root, "ts", (double)(data.timestamp * 1000LL));
+        vals = cJSON_CreateObject();
         if (!vals) { cJSON_Delete(root); return 0; }
+        cJSON_AddItemToObject(root, "values", vals);
     } else {
-        vals = root;
+        vals = root;  
     }
 
     // --- Metadata ---

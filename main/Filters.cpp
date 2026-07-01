@@ -1,10 +1,3 @@
-// ============================================================
-// Filters.cpp — Hiện thực module lọc nhiễu EMA/SMA hai tầng.
-//
-//   Xem Filters.hpp và CLAUDE.md Mục 7 để biết thiết kế đầy đủ.
-//   Toàn bộ tham số lọc và sanity range lấy từ namespace Cfg.
-// ============================================================
-
 #include "Filters.hpp"
 #include "esp_log.h"
 #include <cmath>
@@ -12,16 +5,10 @@
 
 static const char *TAG = "Filters";
 
-// ============================================================
-// Constructor
-// ============================================================
 Filters::Filters() {
     reset();
 }
 
-// ============================================================
-// reset() — xoá toàn bộ trạng thái filter
-// ============================================================
 void Filters::reset() {
     ema_temp_  = {0.0f, false};
     ema_press_ = {0.0f, false};
@@ -40,16 +27,12 @@ void Filters::reset() {
     prev_pms5003_ready_ = false;
 }
 
-// ============================================================
-// process() — điểm vào chính, lọc in-place toàn bộ AirData
-// ============================================================
 void Filters::process(AirData &data) {
-    // §5.3: data_valid == false → bỏ qua toàn bộ chu kỳ, không cập nhật state
+
     if (!data.data_valid) {
         return;
     }
 
-    // §5.2: phát hiện chuyển trạng thái false→true → tái khởi tạo filter nhóm đó
     if (data.bme680_ready  && !prev_bme680_ready_)  { resetBme680State();  }
     if (data.mq135_ready   && !prev_mq135_ready_)   { resetMq135State();   }
     if (data.pms5003_ready && !prev_pms5003_ready_) { resetPms5003State(); }
@@ -63,21 +46,15 @@ void Filters::process(AirData &data) {
     processPms5003(data);
 }
 
-// ============================================================
-// BME680: temperature (EMA), humidity (SMA), pressure (EMA)
-// gas_resistance: không lọc — chỉ giữ giá trị thô (SensorManager) để xem qua JTAG,
-// không feed vào AQI/Comfort/CO2/alert nào (CLAUDE.md: đã bỏ tính TVOC)
-// ============================================================
 void Filters::processBme680(AirData &data) {
     if (!data.bme680_ready) {
-        // Hold-last-good: ghi lại giá trị đã lọc cuối cùng nếu đã khởi tạo
+
         if (ema_temp_.initialized)  data.temperature    = ema_temp_.prev;
         if (sma_humi_.count > 0)    data.humidity       = sma_humi_.last_output;
         if (ema_press_.initialized) data.pressure       = ema_press_.prev;
         return;
     }
 
-    // ---- Temperature — EMA α = Cfg::EMA_ALPHA_TEMP ----
     if (inRange(data.temperature, Cfg::SANITY_TEMP_MIN, Cfg::SANITY_TEMP_MAX)) {
         data.temperature = ema_temp_.initialized
             ? emaUpdate(ema_temp_, data.temperature, Cfg::EMA_ALPHA_TEMP)
@@ -88,7 +65,6 @@ void Filters::processBme680(AirData &data) {
         if (ema_temp_.initialized) { data.temperature = ema_temp_.prev; }
     }
 
-    // ---- Humidity — SMA W = Cfg::FILTER_WINDOW_SIZE ----
     if (inRange(data.humidity, Cfg::SANITY_HUMI_MIN, Cfg::SANITY_HUMI_MAX)) {
         data.humidity = smaUpdate(sma_humi_, data.humidity);
     } else {
@@ -97,7 +73,6 @@ void Filters::processBme680(AirData &data) {
         if (sma_humi_.count > 0) { data.humidity = sma_humi_.last_output; }
     }
 
-    // ---- Pressure — EMA α = Cfg::EMA_ALPHA_PRESS ----
     if (inRange(data.pressure, Cfg::SANITY_PRESS_MIN, Cfg::SANITY_PRESS_MAX)) {
         data.pressure = ema_press_.initialized
             ? emaUpdate(ema_press_, data.pressure, Cfg::EMA_ALPHA_PRESS)
@@ -109,9 +84,6 @@ void Filters::processBme680(AirData &data) {
     }
 }
 
-// ============================================================
-// MQ-135: co2_ppm (giá trị đã bù T/RH bởi SensorManager trước khi đến đây)
-// ============================================================
 void Filters::processMq135(AirData &data) {
     if (!data.mq135_ready) {
         if (ema_co2_.initialized) { data.co2_ppm = ema_co2_.prev; }
@@ -129,10 +101,6 @@ void Filters::processMq135(AirData &data) {
     }
 }
 
-// ============================================================
-// PMS5003: pm1_0, pm2_5, pm10
-//   EMA tính nội bộ bằng float; ghi ngược về uint16_t: lroundf + clamp [0, 500]
-// ============================================================
 void Filters::processPms5003(AirData &data) {
     const long pm_max = static_cast<long>(Cfg::SANITY_PM_MAX);
 
@@ -152,7 +120,6 @@ void Filters::processPms5003(AirData &data) {
         return;
     }
 
-    // ---- PM1.0 — EMA α = Cfg::EMA_ALPHA_PM1 ----
     {
         float raw = static_cast<float>(data.pm1_0);
         if (inRange(raw, Cfg::SANITY_PM_MIN, Cfg::SANITY_PM_MAX)) {
@@ -171,7 +138,6 @@ void Filters::processPms5003(AirData &data) {
         }
     }
 
-    // ---- PM2.5 — EMA α = Cfg::EMA_ALPHA_PM25 ----
     {
         float raw = static_cast<float>(data.pm2_5);
         if (inRange(raw, Cfg::SANITY_PM_MIN, Cfg::SANITY_PM_MAX)) {
@@ -190,7 +156,6 @@ void Filters::processPms5003(AirData &data) {
         }
     }
 
-    // ---- PM10 — EMA α = Cfg::EMA_ALPHA_PM10 ----
     {
         float raw = static_cast<float>(data.pm10);
         if (inRange(raw, Cfg::SANITY_PM_MIN, Cfg::SANITY_PM_MAX)) {
@@ -210,10 +175,6 @@ void Filters::processPms5003(AirData &data) {
     }
 }
 
-// ============================================================
-// Static helpers
-// ============================================================
-
 float Filters::emaWarmStart(EmaState &s, float x) {
     s.prev        = x;
     s.initialized = true;
@@ -225,7 +186,6 @@ float Filters::emaUpdate(EmaState &s, float x, float alpha) {
     return s.prev;
 }
 
-// SMA với ring buffer — trung bình trên số mẫu hiện có (tránh kéo về 0 khi chưa đủ W)
 float Filters::smaUpdate(SmaState &s, float x) {
     s.buf[s.write_idx] = x;
     s.write_idx = (s.write_idx + 1) % Cfg::FILTER_WINDOW_SIZE;
@@ -244,9 +204,6 @@ bool Filters::inRange(float x, float lo, float hi) {
     return x >= lo && x <= hi;
 }
 
-// ============================================================
-// Reset per sensor group (gọi khi phát hiện cờ false→true)
-// ============================================================
 void Filters::resetBme680State() {
     ema_temp_  = {0.0f, false};
     ema_press_ = {0.0f, false};
@@ -269,9 +226,6 @@ void Filters::resetPms5003State() {
     ESP_LOGD(TAG, "PMS5003 filter state reset (pms5003_ready false->true)");
 }
 
-// ============================================================
-// getFilterState() — truy vấn trạng thái hiện tại (debug/JTAG)
-// ============================================================
 bool Filters::getFilterState(float &temp, float &humi, float &press,
                               float &co2,  float &pm1,  float &pm25,  float &pm10) const {
     temp  = ema_temp_.initialized  ? ema_temp_.prev  : 0.0f;

@@ -694,6 +694,10 @@ esp_err_t StorageHelper::compactOfflineQueue(uint32_t head, long total_records) 
     fclose(dst);
     fclose(src);
 
+    // FatFs (f_rename() đứng sau esp_vfs_fat cho SD card) không có ngữ nghĩa
+    // POSIX tự ghi đè đích — trả FR_EXIST nếu đích đã tồn tại. SD_OFFLINE_QUEUE
+    // luôn tồn tại tại thời điểm nén nên phải xoá đích trước khi rename().
+    remove(Cfg::SD_OFFLINE_QUEUE);
     if (rename(tmp_path, Cfg::SD_OFFLINE_QUEUE) != 0) {
         ESP_LOGW(TAG, "Compact: rename %s -> %s lỗi (errno=%d)", tmp_path,
                  Cfg::SD_OFFLINE_QUEUE, errno);

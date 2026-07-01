@@ -1,22 +1,5 @@
 #pragma once
 
-// ============================================================
-// NetworkManager.hpp
-//   Quản lý kết nối Wi-Fi STA + MQTT client + SNTP time sync.
-//
-//   Luồng hoạt động (event-driven, không polling):
-//     esp_wifi_start()  → WIFI_EVENT_STA_START  → esp_wifi_connect()
-//     Got IP            → IP_EVENT_STA_GOT_IP   → wifi_connected_=true
-//     Broker chấp nhận  → MQTT_EVENT_CONNECTED  → mqtt_connected_=true
-//     SNTP sync xong    → sntpSyncCb()          → s_sntp_synced=true
-//
-//   isConnected() → taskNetwork quyết định buffer xuống SD (StorageHelper)
-//   isTimeSynced() → DataFusion/main biết khi nào time(NULL) là Unix time thật
-//
-//   Mọi credential/endpoint lấy từ namespace Cfg (config.hpp),
-//   sinh từ Kconfig.projbuild — không hardcode trong source.
-// ============================================================
-
 #include "DataStructures.hpp"
 #include "config.hpp"
 
@@ -30,9 +13,6 @@
 #include <atomic>
 #include <functional>
 
-// Callback được gọi khi broker gửi lệnh xuống qua MQTT_TOPIC_CMD.
-// `cmd`: chuỗi từ field "cmd" trong JSON payload (ví dụ: "confirm_calib").
-// Được đăng ký bởi DataFusion/main — không gọi trực tiếp từ NetworkManager.
 using CommandCallback = std::function<void(const char *cmd)>;
 
 class NetworkManager {
@@ -43,70 +23,35 @@ public:
     NetworkManager(const NetworkManager&)            = delete;
     NetworkManager& operator=(const NetworkManager&) = delete;
 
-    // Khởi tạo Wi-Fi STA, MQTT client và SNTP.
-    // Không block — toàn bộ kết nối xử lý ngầm qua event handler;
-    // hàm trả về ngay sau khi đăng ký handler và start driver.
     esp_err_t init();
 
-    // Serialize AirData → JSON (msg_type="data") và publish lên MQTT_TOPIC_DATA.
-    // Gọi mỗi chu kỳ taskNetwork (periodic heartbeat).
-    // Trả ESP_ERR_INVALID_STATE nếu MQTT chưa connected — caller
-    // (taskNetwork) sẽ buffer xuống SD card qua StorageHelper.
     esp_err_t publishData(const AirData &data);
 
-    // Serialize AirData → JSON (msg_type="alert") và publish lên cùng
-    // MQTT_TOPIC_DATA — chỉ gọi khi alert_level đổi mức (edge-triggered,
-    // debounce ở taskNetwork), tách rời khỏi cadence định kỳ của publishData
-    // để đáp ứng NFR ALERT_MAX_LATENCY_MS. Cùng topic với publishData; phân
-    // biệt 2 luồng bằng field "msg_type" trong JSON (xem buildJson()).
-    // Lý do cảnh báo lấy từ data.alert_reason (DataFusion.hpp §8/§11, đã ghi sẵn
-    // bởi DataFusion::computeAlertLevel — lý do CAO NHẤT trong chu kỳ, có thể
-    // là AQI/Comfort/CO2 ở mức CRITICAL). Lý do hiệu chuẩn CỤ THỂ
-    // ("CALIB_DRIFT_TEMP"/"CALIB_DRIFT_PM25"/.../"CALIB_OVERDUE_30D") luôn nằm
-    // trong data.calib_reason — ĐỘC LẬP với alert_reason, kể cả khi calib
-    // không phải nguyên nhân cao nhất. data.alert_flags (bitmask FLAG_*,
-    // DataFusion.hpp) BỔ SUNG cho alert_reason — cho biết TẤT CẢ điều kiện
-    // đang active, kể cả khi nhiều điều kiện CRITICAL/WARNING xảy ra đồng
-    // thời. buildJson() đưa cả các field này vào JSON — không cần tham số
-    // reason riêng.
     esp_err_t publishAlert(const AirData &data);
 
-    // Đăng ký callback nhận lệnh từ broker (topic MQTT_TOPIC_CMD).
-    // Gọi trước init(). Callback chạy trong context của MQTT event task —
-    // nếu cần ghi NVS hay thay đổi shared state, dùng mutex hoặc queue.
     void setCommandCallback(CommandCallback cb);
 
-    // True ⇔ cả Wi-Fi (đã có IP) lẫn MQTT đều đang connected.
     bool isConnected() const;
 
-    // True ⇔ SNTP đã đồng bộ ít nhất một lần — time(NULL) trả Unix time hợp lệ.
-    // DataFusion/main dùng để quyết định khi nào ghi đè AirData.timestamp.
     bool isTimeSynced() const;
 
 private:
     esp_netif_t              *netif_;
     esp_mqtt_client_handle_t  mqtt_;
 
-    // Atomic: được set từ ESP event callback (có thể chạy trên core khác).
     std::atomic<bool> wifi_connected_;
     std::atomic<bool> mqtt_connected_;
 
-    // Client ID = "aq01_<MAC WiFi STA>" — duy nhất mỗi thiết bị,
-    // tránh xung đột broker khi nhiều trạm AQ01 kết nối cùng lúc.
     char mqtt_client_id_[24];
 
     CommandCallback cmd_callback_;
 
     esp_err_t initWifi();
     esp_err_t initMqtt();
-    esp_err_t initSntp();  // khởi tạo SNTP sau khi netif + event loop sẵn sàng
+    esp_err_t initSntp();
 
-    // Xử lý lệnh nhận từ broker: built-in commands (reboot...) trước,
-    // sau đó delegate sang cmd_callback_ cho các lệnh nghiệp vụ (confirm_calib...).
     void dispatchCommand(const char *cmd);
 
-    // Static handlers: esp_event yêu cầu free function signature;
-    // `arg` = `this` để truy cập state instance.
     static void wifiEventHandler(void *arg, esp_event_base_t base,
                                  int32_t id, void *event_data);
     static void ipEventHandler  (void *arg, esp_event_base_t base,
@@ -114,20 +59,9 @@ private:
     static void mqttEventHandler(void *arg, esp_event_base_t base,
                                  int32_t id, void *event_data);
 
-    // Callback SNTP: gọi bởi lwip khi lần đầu đồng bộ thành công.
-    // esp_sntp_time_cb_t = void(*)(struct timeval*) — compatible với static method.
     static void sntpSyncCb(struct timeval *tv);
 
-    // Serialize AirData → JSON compact (không alloc heap — dùng cJSON_PrintPreallocated).
-    // Trả số byte ghi vào `out` (không kèm '\0') hoặc 0 nếu lỗi/buffer nhỏ.
-    // data.alert_level/data.alert_reason/data.calib_reason (§8/§11) luôn được
-    // đưa vào JSON — dùng chung cho cả publishData và publishAlert, không cần
-    // tham số riêng. `msg_type` ("data"/"alert") được nhúng thêm vào JSON để
-    // phân biệt 2 luồng publish khi cùng publish lên 1 topic (MQTT_TOPIC_DATA).
     static size_t buildJson(const AirData &data, const char *msg_type, char *out, size_t out_sz);
 
-    // Helper chung cho publishData/publishAlert: serialize (kèm msg_type) +
-    // publish lên Cfg::MQTT_TOPIC_DATA. Trả ESP_ERR_INVALID_STATE nếu MQTT
-    // chưa connected, ESP_FAIL nếu serialize lỗi/buffer nhỏ hoặc publish thất bại.
     esp_err_t publishJson(const char *msg_type, const AirData &data);
 };

@@ -161,6 +161,7 @@ esp_err_t DataFusion::confirmRecalibration(AirData &data, bool time_synced) {
     if (err == ESP_OK) {
         data.calib_needed = false;
         data.last_calib_timestamp = now;
+        computeAlertLevel(data);
         ESP_LOGI(TAG, "Hiệu chuẩn xác nhận (mask=0x%02X) tại %lld", baseline_mask_, (long long)now);
     }
     return err;
@@ -613,6 +614,15 @@ void DataFusion::driftSelfCheck(AirData &data, bool time_synced) {
 }
 
 void DataFusion::computeAlertLevel(AirData &data) {
+    // last_alert_level_/alert_level_changed_us_/last_calib_reason_ được taskSensor
+    // (process()) VÀ task MQTT (confirmRecalibration()) cùng chạm — khóa mutex_
+    // (đã dùng cho baseline_, DataFusion.hpp §12) để tránh race giữa 2 task.
+    // Hàm thuần tính toán O(1), không I/O nên giữ mutex_ suốt hàm là chấp nhận được.
+    if (xSemaphoreTake(mutex_, pdMS_TO_TICKS(100)) != pdTRUE) {
+        ESP_LOGW(TAG, "computeAlertLevel: không lấy được mutex_, bỏ qua chu kỳ này");
+        return;
+    }
+
     AlertLevel level = AlertLevel::NONE;
     const char *reason = kNoAlertReason;
     uint16_t flags = 0;
@@ -678,6 +688,8 @@ void DataFusion::computeAlertLevel(AirData &data) {
     const char *calib_reason = data.calib_needed ? last_calib_reason_ : kNoCalibReason;
     std::strncpy(data.calib_reason, calib_reason, sizeof(data.calib_reason) - 1);
     data.calib_reason[sizeof(data.calib_reason) - 1] = '\0';
+
+    xSemaphoreGive(mutex_);
 }
 
 float DataFusion::computeAqiSubindex(float concentration, const float *breakpoints) const {

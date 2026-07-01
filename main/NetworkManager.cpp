@@ -205,13 +205,22 @@ esp_err_t NetworkManager::publishJson(const char *msg_type, const AirData &data)
 
     char json[Cfg::MQTT_JSON_BUF_LEN];
     size_t n = buildJson(data, msg_type, json, sizeof(json));
-    if (n == 0) return ESP_FAIL;
+    if (n == 0) {
+        ESP_LOGE(TAG, "buildJson thất bại — buffer quá nhỏ hoặc heap OOM (MQTT_JSON_BUF_LEN=%d)",
+                 Cfg::MQTT_JSON_BUF_LEN);
+        return ESP_FAIL;
+    }
 
     // QoS 1: đảm bảo broker nhận ít nhất 1 lần — nếu PUBACK mất, client retransmit
     // và subscriber có thể nhận duplicate. Dedup phía subscriber bằng (ts, client_id).
     int msg_id = esp_mqtt_client_publish(mqtt_, Cfg::MQTT_TOPIC_DATA, json,
                                           static_cast<int>(n), 1, 0);
-    return (msg_id >= 0) ? ESP_OK : ESP_FAIL;
+    if (msg_id < 0) {
+        ESP_LOGE(TAG, "esp_mqtt_client_publish thất bại (topic='%s') — MQTT outbox đầy hoặc mất kết nối",
+                 Cfg::MQTT_TOPIC_DATA);
+        return ESP_FAIL;
+    }
+    return ESP_OK;
 }
 
 bool NetworkManager::isConnected() const {
@@ -303,6 +312,12 @@ void NetworkManager::mqttEventHandler(void *arg, esp_event_base_t,
                 break;
             }
 
+            // Trích requestId từ phần sau dấu '/' cuối topic (v1/.../request/{requestId})
+            const char *request_id = evt->topic + cmd_prefix_len + 1;
+            size_t id_len = static_cast<size_t>(evt->topic_len) - cmd_prefix_len - 1;
+            char request_id_buf[16] = {};
+            std::memcpy(request_id_buf, request_id, std::min(id_len, sizeof(request_id_buf) - 1));
+
             // Copy payload vào buffer cục bộ để null-terminate
             char payload[64];
             size_t copy_len = std::min(static_cast<size_t>(evt->data_len), sizeof(payload) - 1);
@@ -320,6 +335,11 @@ void NetworkManager::mqttEventHandler(void *arg, esp_event_base_t,
             if (cJSON_IsString(cmd_item)) {
                 ESP_LOGI(TAG, "Nhận lệnh RPC từ ThingsBoard: '%s'", cmd_item->valuestring);
                 self->dispatchCommand(cmd_item->valuestring);
+                // reboot gọi esp_restart() bên trong → không bao giờ trả về đây
+                // nên response tự nhiên chỉ gửi cho các lệnh còn lại
+                char resp_topic[64];
+                snprintf(resp_topic, sizeof(resp_topic), "v1/devices/me/rpc/response/%s", request_id_buf);
+                esp_mqtt_client_publish(self->mqtt_, resp_topic, "{\"result\":\"ok\"}", 0, 1, 0);
             }
             cJSON_Delete(root);
             break;
@@ -372,16 +392,20 @@ size_t NetworkManager::buildJson(const AirData &data, const char *msg_type, char
 
     cJSON *root = cJSON_CreateObject();
     if (!root) return 0;
-    constexpr int64_t EPOCH_2020 = 1577836800LL;
+
+    // Khi SNTP đã sync: dùng nested format {"ts": <ms>, "values": {...}}.
+    // ThingsBoard transport xử lý "ts" (ms) làm timestamp chính thức của data point —
+    // cho phép đặt timestamp chính xác khi retry/offline buffer drain và tránh
+    // lệch giờ do network latency. Transport tự trích values thành flat telemetry
+    // trước khi vào Rule Chain, nên msg trong TBEL script luôn là flat.
+    // Khi chưa sync: flat format, ThingsBoard gán server timestamp.
     cJSON *vals;
-    if (data.timestamp > EPOCH_2020) {
-        // ts phải là milliseconds theo ThingsBoard Telemetry API
-        cJSON_AddNumberToObject(root, "ts", (double)(data.timestamp * 1000LL));
-        vals = cJSON_CreateObject();
+    if (s_sntp_synced.load()) {
+        cJSON_AddNumberToObject(root, "ts", (double)data.timestamp * 1000.0);  // giây → ms
+        vals = cJSON_AddObjectToObject(root, "values");
         if (!vals) { cJSON_Delete(root); return 0; }
-        cJSON_AddItemToObject(root, "values", vals);
     } else {
-        vals = root;  
+        vals = root;
     }
 
     // --- Metadata ---

@@ -229,6 +229,15 @@ static void taskNetwork(void *) {
         AirData snap{};
         xQueuePeek(s_airq, &snap, 0);
 
+        // Tính sớm để publishData mang alert_latency_ms đúng. Khác 0 chỉ khi level
+        // đổi mức (= "latency phát hiện → publish"); chu kỳ không đổi để 0.
+        const auto level = static_cast<DataFusion::AlertLevel>(snap.alert_level);
+        const bool level_changed = (level != last_published_level);
+        snap.alert_latency_ms = level_changed
+            ? static_cast<uint32_t>(
+                  std::max<int64_t>(0, esp_timer_get_time() - snap.alert_level_changed_us) / 1000)
+            : 0u;
+
         // (a) EDGE kết nối MQTT.
         const bool conn = s_network.isConnected();
         if (conn != prev_connected) {
@@ -248,18 +257,19 @@ static void taskNetwork(void *) {
         // (b) Publish dữ liệu — mất mạng (đã biết trước hoặc rớt giữa chừng)
         //     → Offline Buffer trên SD (CLAUDE.md §4 "Offline Buffer").
         if (conn) {
-            if (s_network.publishData(snap) == ESP_ERR_INVALID_STATE) {
+            esp_err_t pub_err = s_network.publishData(snap);
+            if (pub_err == ESP_ERR_INVALID_STATE) {
                 s_storage.bufferOffline(snap);
+            } else if (pub_err != ESP_OK) {
+                ESP_LOGW(TAG, "publishData thất bại (%s) — bỏ qua chu kỳ này",
+                         esp_err_to_name(pub_err));
             }
         } else {
             s_storage.bufferOffline(snap);
         }
 
         // (c) Debounce publishAlert theo alert_level — đáp ứng NFR ≤ ALERT_MAX_LATENCY_MS (XM-11).
-        const auto level = static_cast<DataFusion::AlertLevel>(snap.alert_level);
-        if (level != last_published_level) {
-            snap.alert_latency_ms = static_cast<uint32_t>(
-                std::max<int64_t>(0, esp_timer_get_time() - snap.alert_level_changed_us) / 1000);
+        if (level_changed) {
             if (snap.alert_latency_ms > Cfg::ALERT_MAX_LATENCY_MS) {
                 ESP_LOGW(TAG, "Vi phạm NFR alert latency: %u ms > %u ms (alert_reason=%s)",
                          (unsigned)snap.alert_latency_ms, (unsigned)Cfg::ALERT_MAX_LATENCY_MS,

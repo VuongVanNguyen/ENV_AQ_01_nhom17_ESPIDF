@@ -371,7 +371,18 @@ size_t NetworkManager::buildJson(const AirData &data, const char *msg_type, char
     static const char *CO2_LABELS[]     = {"Tốt", "Trung bình", "Xấu"};
 
     cJSON *root = cJSON_CreateObject();
-    if (!root) return 0;  // heap cạn kiệt — caller log và xử lý
+    if (!root) return 0;
+    constexpr int64_t EPOCH_2020 = 1577836800LL;
+    cJSON *vals;
+    if (data.timestamp > EPOCH_2020) {
+        // ts phải là milliseconds theo ThingsBoard Telemetry API
+        cJSON_AddNumberToObject(root, "ts", (double)(data.timestamp * 1000LL));
+        vals = cJSON_CreateObject();
+        if (!vals) { cJSON_Delete(root); return 0; }
+        cJSON_AddItemToObject(root, "values", vals);
+    } else {
+        vals = root;  
+    }
 
     // --- Metadata ---
     // msg_type: "data" (publishData, periodic) hoặc "alert" (publishAlert,
@@ -379,65 +390,60 @@ size_t NetworkManager::buildJson(const AirData &data, const char *msg_type, char
     // Cfg::MQTT_TOPIC_DATA, field này là cách DUY NHẤT để dashboard phân biệt
     // lại 2 luồng vì ThingsBoard gộp telemetry theo (device, key, ts), không
     // giữ lại topic MQTT gốc.
-    cJSON_AddStringToObject(root, "msg_type", msg_type);
-    cJSON_AddNumberToObject(root, "ts",      (double)data.timestamp);
-    cJSON_AddBoolToObject  (root, "valid",   data.data_valid);
-    // cycle_ms: thời gian taskSensor xử lý chu kỳ này — cho dashboard giám sát
-    // NFR pipeline ≤300ms (CLAUDE.md §3) mà không cần đọc log debug UART.
-    cJSON_AddNumberToObject(root, "cycle_ms", data.cycle_time_ms);
+    cJSON_AddStringToObject(vals, "msg_type", msg_type);
+    // valid: false nếu readAll() trả lỗi cứng — ThingsBoard alarm: valid=false
+    cJSON_AddBoolToObject  (vals, "valid",    data.data_valid);
+    // cycle_ms: giám sát NFR ≤300ms mà không cần đọc log UART; ThingsBoard alarm: cycle_ms>300
+    cJSON_AddNumberToObject(vals, "cycle_ms", data.cycle_time_ms);
 
     // --- BME680 ---
-    cJSON_AddNumberToObject(root, "temp",    data.temperature);
-    cJSON_AddNumberToObject(root, "humi",    data.humidity);
-    cJSON_AddNumberToObject(root, "pres",    data.pressure);
+    cJSON_AddNumberToObject(vals, "temp",    data.temperature);
+    cJSON_AddNumberToObject(vals, "humi",    data.humidity);
+    cJSON_AddNumberToObject(vals, "pres",    data.pressure);
 
     // --- PMS5003 ---
-    cJSON_AddNumberToObject(root, "pm1",     data.pm1_0);
-    cJSON_AddNumberToObject(root, "pm25",    data.pm2_5);
-    cJSON_AddNumberToObject(root, "pm10",    data.pm10);
+    cJSON_AddNumberToObject(vals, "pm1",     data.pm1_0);
+    cJSON_AddNumberToObject(vals, "pm25",    data.pm2_5);
+    cJSON_AddNumberToObject(vals, "pm10",    data.pm10);
 
     // --- MQ-135 ---
-    cJSON_AddNumberToObject(root, "co2",     data.co2_ppm);
+    cJSON_AddNumberToObject(vals, "co2",     data.co2_ppm);
 
     // --- Chỉ số tính toán (DataFusion) ---
-    cJSON_AddNumberToObject(root, "aqi",         data.aqi);
-    cJSON_AddNumberToObject(root, "comfort",     data.comfort_index);
+    cJSON_AddNumberToObject(vals, "aqi",         data.aqi);
+    cJSON_AddNumberToObject(vals, "comfort",     data.comfort_index);
 
     if (data.pms5003_ready && data.aqi_category < 6)
-        cJSON_AddStringToObject(root, "aqi_cat",     AQI_LABELS[data.aqi_category]);
+        cJSON_AddStringToObject(vals, "aqi_cat",     AQI_LABELS[data.aqi_category]);
     if (data.bme680_ready && data.comfort_category < 6)
-        cJSON_AddStringToObject(root, "comfort_cat", COMFORT_LABELS[data.comfort_category]);
+        cJSON_AddStringToObject(vals, "comfort_cat", COMFORT_LABELS[data.comfort_category]);
     if (data.mq135_ready && data.co2_category < 3)
-        cJSON_AddStringToObject(root, "co2_cat",     CO2_LABELS[data.co2_category]);
+        cJSON_AddStringToObject(vals, "co2_cat",     CO2_LABELS[data.co2_category]);
 
     // --- Trạng thái sẵn sàng cảm biến ---
-    cJSON_AddBoolToObject(root, "bme680_ok",  data.bme680_ready);
-    cJSON_AddBoolToObject(root, "pms_ok",     data.pms5003_ready);
-    cJSON_AddBoolToObject(root, "mq135_ok",   data.mq135_ready);
+    // ThingsBoard: tạo alarm khi bất kỳ *_ok=false (sensor fault)
+    cJSON_AddBoolToObject(vals, "bme680_ok",  data.bme680_ready);
+    cJSON_AddBoolToObject(vals, "pms_ok",     data.pms5003_ready);
+    cJSON_AddBoolToObject(vals, "mq135_ok",   data.mq135_ready);
 
     // --- Cảnh báo vượt ngưỡng (DataFusion::computeAlertLevel) ---
-    // alert_level: 0=NONE 1=WARNING 2=CRITICAL; alert_reason mô tả lý do CAO
-    // NHẤT trong chu kỳ (AQI_HAZARDOUS/COMFORT_DANGER/CO2_CRITICAL/CALIB_DRIFT_*/
-    // CALIB_OVERDUE_30D/NONE). Gửi ở MỌI payload (không chỉ alert) để dashboard
-    // hiển thị mức độ nguy hiểm real-time.
-    // alert_flags: bitmask FLAG_* (DataFusion.hpp) BỔ SUNG cho alert_reason —
-    // set ĐỘC LẬP cho từng điều kiện đang active, cho phép dashboard phát
-    // hiện NHIỀU điều kiện CRITICAL/WARNING xảy ra ĐỒNG THỜI (ví dụ AQI và
-    // Comfort cùng CRITICAL trong 1 chu kỳ) mà alert_reason không thể hiện hết.
-    cJSON_AddNumberToObject(root, "alert_level",  data.alert_level);
-    cJSON_AddStringToObject(root, "alert_reason", data.alert_reason);
-    cJSON_AddNumberToObject(root, "alert_flags",  data.alert_flags);
-    cJSON_AddNumberToObject(root, "alert_latency_ms", data.alert_latency_ms);
+    // alert_flags: bitmask BỔ SUNG cho alert_reason — cho phép dashboard phát
+    // hiện NHIỀU điều kiện CRITICAL/WARNING xảy ra ĐỒNG THỜI mà alert_reason
+    // (chỉ mang lý do CAO NHẤT) không thể hiện hết.
+    cJSON_AddNumberToObject(vals, "alert_level",      data.alert_level);
+    cJSON_AddStringToObject(vals, "alert_reason",     data.alert_reason);
+    cJSON_AddNumberToObject(vals, "alert_flags",      data.alert_flags);
+    // alert_latency_ms: NFR ≤3000ms (Cfg::ALERT_MAX_LATENCY_MS); ThingsBoard alarm: >3000
+    cJSON_AddNumberToObject(vals, "alert_latency_ms", data.alert_latency_ms);
 
     // --- Hiệu chuẩn (Drift Self-Check) ---
-    // calib_reason ĐỘC LẬP với alert_reason — luôn cụ thể (CALIB_DRIFT_TEMP/
-    // PM25/.../CALIB_OVERDUE_30D hoặc NONE) khi calib_needed=true, ngay cả khi
-    // alert_reason đang mang lý do AQI/Comfort/CO2 CRITICAL khác.
-    cJSON_AddBoolToObject  (root, "calib_alert",  data.calib_needed);
-    cJSON_AddStringToObject(root, "calib_reason", data.calib_reason);
-    cJSON_AddNumberToObject(root, "calib_ts",     (double)data.last_calib_timestamp);
+    // calib_reason ĐỘC LẬP với alert_reason — luôn cụ thể khi calib_needed=true.
+    cJSON_AddBoolToObject  (vals, "calib_alert",  data.calib_needed);
+    cJSON_AddStringToObject(vals, "calib_reason", data.calib_reason);
+    // calib_ts: Unix giây. ThingsBoard widget JS formatter: new Date(value*1000).toLocaleString('vi-VN')
+    cJSON_AddNumberToObject(vals, "calib_ts",     (double)data.last_calib_timestamp);
 
-    // fmt=0: compact JSON (không khoảng trắng) — tiết kiệm buffer và băng thông
+    // fmt=0: compact JSON — tiết kiệm buffer và băng thông
     size_t n = 0;
     if (cJSON_PrintPreallocated(root, out, static_cast<int>(out_sz), 0)) {
         n = std::strlen(out);

@@ -100,7 +100,7 @@ inline constexpr size_t    OFFLINE_QUEUE_MAX_RECORDS = 2000;
 
 inline constexpr size_t    OFFLINE_DRAIN_BATCH  = 20;
 
-inline constexpr uint32_t  OFFLINE_DRAIN_PACE_MS = 300;
+inline constexpr uint32_t  OFFLINE_DRAIN_PACE_MS = 1000;
 
 inline constexpr uint32_t  OFFLINE_MAGIC          = 0x31305141;
 inline constexpr uint16_t  OFFLINE_FORMAT_VERSION = 1;
@@ -184,6 +184,7 @@ inline constexpr float    ALERT_CO2_CRITICAL_PPM = static_cast<float>(CONFIG_ALE
 
 inline constexpr const char *WIFI_SSID         = CONFIG_WIFI_SSID;
 inline constexpr const char *WIFI_PASSWORD     = CONFIG_WIFI_PASSWORD;
+inline constexpr const char *WIFI_DNS_BACKUP   = CONFIG_WIFI_DNS_BACKUP;
 inline constexpr const char *MQTT_BROKER_URL   = CONFIG_MQTT_BROKER_URL;
 inline constexpr const char *MQTT_TOPIC_DATA   = CONFIG_MQTT_TOPIC;
 inline constexpr const char *MQTT_TOPIC_CMD    = CONFIG_MQTT_TOPIC_CMD;

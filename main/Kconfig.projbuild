@@ -12,6 +12,14 @@ menu "ENV-AQ-01 Project Configuration"
             default "MyPassword"
             help
                 Mật khẩu WiFi.
+
+        config WIFI_DNS_BACKUP
+            string "Backup DNS server (IPv4)"
+            default "8.8.8.8"
+            help
+                DNS dự phòng, dùng khi DNS chính (do router cấp qua DHCP) không
+                phản hồi hoặc bị lỗi — tránh MQTT không kết nối được chỉ vì
+                getaddrinfo() không phân giải được hostname broker.
     endmenu
 
     menu "MQTT"

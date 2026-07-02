@@ -229,6 +229,10 @@ void NetworkManager::ipEventHandler(void *arg, esp_event_base_t,
         ESP_LOGI(TAG, "Có IP " IPSTR, IP2STR(&evt->ip_info.ip));
         self->wifi_connected_.store(true);
 
+        esp_netif_dns_info_t dns_backup = {};
+        dns_backup.ip.type = ESP_IPADDR_TYPE_V4;
+        dns_backup.ip.u_addr.ip4.addr = esp_ip4addr_aton(Cfg::WIFI_DNS_BACKUP);
+        esp_netif_set_dns_info(self->netif_, ESP_NETIF_DNS_BACKUP, &dns_backup);
     }
 }
 

@@ -51,7 +51,13 @@ inline constexpr uint32_t MQ135_ADC_DEFAULT_VREF_MV = 1100;
 
 inline constexpr float    MQ135_VREF        = 3.3f;
 inline constexpr float    MQ135_RL_KOHM     = 1.0f;
-inline constexpr float    MQ135_RO_KOHM     = 7.93f;
+inline constexpr float    MQ135_RO_KOHM     = 37.10f;  
+
+inline constexpr float    MQ135_SENSOR_VCC      = 5.0f;
+inline constexpr float    MQ135_DIVIDER_RA_KOHM = 2.0f;
+inline constexpr float    MQ135_DIVIDER_RB_KOHM = 3.0f;
+inline constexpr float    MQ135_DIVIDER_RATIO   =
+    MQ135_DIVIDER_RB_KOHM / (MQ135_DIVIDER_RA_KOHM + MQ135_DIVIDER_RB_KOHM);
 
 inline constexpr float    MQ135_CURVE_A     = 110.47f;
 inline constexpr float    MQ135_CURVE_B     = -2.8612f;

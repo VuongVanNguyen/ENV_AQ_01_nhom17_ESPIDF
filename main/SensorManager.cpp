@@ -12,6 +12,7 @@
 
 #include "i2cdev.h"
 
+#include <cstdio>
 #include <cstring>
 #include <cmath>
 #include <ctime>
@@ -390,18 +391,21 @@ esp_err_t SensorManager::mq135ReadPpm(float &co2_ppm, float t_c, float rh_pct) {
                               ((1 << Cfg::MQ135_ADC_BITWIDTH) - 1));
     }
 
-    float vrl = mv / 1000.0f;
-    if (vrl <= 0.01f) {
+    float v_measured = mv / 1000.0f;
+    if (v_measured <= 0.01f) {
         co2_ppm = 0.0f;
         return ESP_OK;
     }
 
-    float rs = (Cfg::MQ135_VREF - vrl) * Cfg::MQ135_RL_KOHM / vrl;
+    float vrl = v_measured / Cfg::MQ135_DIVIDER_RATIO;
+
+    float rs = (Cfg::MQ135_SENSOR_VCC - vrl) * Cfg::MQ135_RL_KOHM / vrl;
 
     float cf      = mq135CorrectionFactor(t_c, rh_pct);
     float rs_comp = (cf > 0.001f) ? rs / cf : rs;
     float ratio   = rs_comp / Cfg::MQ135_RO_KOHM;
 
     co2_ppm = Cfg::MQ135_CURVE_A * powf(ratio, Cfg::MQ135_CURVE_B);
+
     return ESP_OK;
 }

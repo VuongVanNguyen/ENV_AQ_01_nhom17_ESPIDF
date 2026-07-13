@@ -97,6 +97,7 @@ project_root/
 | **ADC1** | GPIO34 | MQ-135 | Dùng `adc_oneshot_*` API; tránh xung đột với WiFi (dùng ADC1, không dùng ADC2) |
 | **SPI** | SCK=18, MISO=19, MOSI=23, CS=5 | SD Card | Dùng SPI host `SPI2_HOST`; mount qua `esp_vfs_fat_sdspi_mount()` |
 | **Output** | GPIO25 (LED RED), GPIO26 (LED YELLOW), GPIO27 (LED GREEN), GPIO32 (Buzzer) | Cảnh báo | Cấu hình qua `gpio_config()` với mode `GPIO_MODE_OUTPUT` |
+| **Input** | GPIO33 | Nút bấm shutdown an toàn | `GPIO_MODE_INPUT`, pull-up nội, active LOW, ngắt `GPIO_INTR_NEGEDGE`; giữ ≥2s để xác nhận (chống rung tiếp điểm/nhấn nhầm) |
 
 **Kết nối PCF8574 → LCD 16x2:**
 - P0: RS, P1: RW (giữ LOW = write), P2: E, P3: Backlight (BL)

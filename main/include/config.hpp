@@ -113,6 +113,11 @@ inline constexpr int      LED_YELLOW_PIN    = 26;
 inline constexpr int      LED_GREEN_PIN     = 27;
 inline constexpr int      BUZZER_PIN        = 32;
 
+inline constexpr int      SHUTDOWN_BUTTON_PIN = 33;
+inline constexpr uint32_t BUTTON_DEBOUNCE_MS   = 50;
+inline constexpr uint32_t BUTTON_POLL_MS       = 50;
+inline constexpr uint32_t BUTTON_HOLD_MS       = 2'000;
+
 // ============================================================
 // 6. TIMING (đến từ Kconfig — có thể chỉnh qua menuconfig)
 // ============================================================
@@ -260,10 +265,12 @@ inline constexpr uint32_t TASK_STACK_SENSOR_WORDS   = 4096;
 inline constexpr uint32_t TASK_STACK_NETWORK_WORDS  = 6144;
 inline constexpr uint32_t TASK_STACK_DISPLAY_WORDS  = 3072;
 inline constexpr uint32_t TASK_STACK_STORAGE_WORDS  = 4096;
+inline constexpr uint32_t TASK_STACK_BUTTON_WORDS   = 3072;
 
 inline constexpr uint32_t TASK_PRIO_SENSOR          = 5;
 inline constexpr uint32_t TASK_PRIO_NETWORK         = 4;
 inline constexpr uint32_t TASK_PRIO_DISPLAY         = 3;
 inline constexpr uint32_t TASK_PRIO_STORAGE         = 2;
+inline constexpr uint32_t TASK_PRIO_BUTTON          = 2;
 
 }

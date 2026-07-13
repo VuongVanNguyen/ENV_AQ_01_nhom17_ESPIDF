@@ -15,6 +15,7 @@
 #include "esp_task_wdt.h"
 #include "esp_system.h"
 #include "driver/gpio.h"
+#include "esp_attr.h"
 #include "freertos/semphr.h"
 #include "freertos/queue.h"
 #include <algorithm>
@@ -59,6 +60,25 @@ static void driveAlertOutputs(const AirData &data) {
                     static_cast<uint32_t>(level == DataFusion::AlertLevel::CRITICAL));
     gpio_set_level(static_cast<gpio_num_t>(Cfg::BUZZER_PIN),
                     static_cast<uint32_t>(level == DataFusion::AlertLevel::CRITICAL));
+}
+
+static void doShutdown() {
+    bool expected = false;
+    if (!s_shutdown_requested.compare_exchange_strong(expected, true)) {
+        return;
+    }
+
+    gpio_set_level(static_cast<gpio_num_t>(Cfg::LED_RED_PIN), 0);
+    gpio_set_level(static_cast<gpio_num_t>(Cfg::LED_YELLOW_PIN), 0);
+    gpio_set_level(static_cast<gpio_num_t>(Cfg::BUZZER_PIN), 0);
+    s_storage.prepareShutdown();
+
+    for (;;) {
+        gpio_set_level(static_cast<gpio_num_t>(Cfg::LED_GREEN_PIN), 1);
+        vTaskDelay(pdMS_TO_TICKS(Cfg::SHUTDOWN_LED_BLINK_MS));
+        gpio_set_level(static_cast<gpio_num_t>(Cfg::LED_GREEN_PIN), 0);
+        vTaskDelay(pdMS_TO_TICKS(Cfg::SHUTDOWN_LED_BLINK_MS));
+    }
 }
 
 static esp_err_t startPeriodicNotifier(esp_timer_handle_t &timer, const char *name,
@@ -228,6 +248,37 @@ static void taskNetwork(void *) {
     }
 }
 
+static void IRAM_ATTR taskButtonIsr(void *arg) {
+    BaseType_t woken = pdFALSE;
+    vTaskNotifyGiveFromISR(static_cast<TaskHandle_t>(arg), &woken);
+    portYIELD_FROM_ISR(woken);
+}
+
+static void taskButton(void *) {
+    for (;;) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        vTaskDelay(pdMS_TO_TICKS(Cfg::BUTTON_DEBOUNCE_MS));
+        if (gpio_get_level(static_cast<gpio_num_t>(Cfg::SHUTDOWN_BUTTON_PIN)) != 0) {
+            continue;
+        }
+
+        bool still_pressed = true;
+        for (uint32_t held_ms = 0; held_ms < Cfg::BUTTON_HOLD_MS; held_ms += Cfg::BUTTON_POLL_MS) {
+            vTaskDelay(pdMS_TO_TICKS(Cfg::BUTTON_POLL_MS));
+            if (gpio_get_level(static_cast<gpio_num_t>(Cfg::SHUTDOWN_BUTTON_PIN)) != 0) {
+                still_pressed = false;
+                break;
+            }
+        }
+
+        if (still_pressed) {
+            ESP_LOGW(TAG, "Nút shutdown giữ đủ %ums — thực thi shutdown cục bộ",
+                     (unsigned)Cfg::BUTTON_HOLD_MS);
+            doShutdown();
+        }
+    }
+}
+
 extern "C" void app_main() {
     // [PM-1] Cân nhắc tối ưu công suất (CHƯA triển khai):
     //   esp_wifi_set_ps(WIFI_PS_MIN_MODEM) (NetworkManager::initWifi) đã xử lý
@@ -289,17 +340,8 @@ extern "C" void app_main() {
 
         if (std::strcmp(cmd, "shutdown") == 0) {
             ESP_LOGW(TAG, "Thực thi lệnh shutdown...");
-            s_shutdown_requested.store(true);
-            gpio_set_level(static_cast<gpio_num_t>(Cfg::LED_RED_PIN), 0);
-            gpio_set_level(static_cast<gpio_num_t>(Cfg::LED_YELLOW_PIN), 0);
-            gpio_set_level(static_cast<gpio_num_t>(Cfg::BUZZER_PIN), 0);
-            s_storage.prepareShutdown();
-            for (;;) {
-                gpio_set_level(static_cast<gpio_num_t>(Cfg::LED_GREEN_PIN), 1);
-                vTaskDelay(pdMS_TO_TICKS(Cfg::SHUTDOWN_LED_BLINK_MS));
-                gpio_set_level(static_cast<gpio_num_t>(Cfg::LED_GREEN_PIN), 0);
-                vTaskDelay(pdMS_TO_TICKS(Cfg::SHUTDOWN_LED_BLINK_MS));
-            }
+            doShutdown();
+            return;
         }
 
         if (std::strcmp(cmd, "skip_warmup") == 0) {
@@ -353,13 +395,28 @@ extern "C" void app_main() {
     gpio_set_level(static_cast<gpio_num_t>(Cfg::LED_GREEN_PIN), 0);
     gpio_set_level(static_cast<gpio_num_t>(Cfg::BUZZER_PIN), 0);
 
-    TaskHandle_t h_sensor = nullptr, h_display = nullptr, h_network = nullptr;
+    const gpio_config_t button_gpio_cfg = {
+        .pin_bit_mask = (1ULL << Cfg::SHUTDOWN_BUTTON_PIN),
+        .mode         = GPIO_MODE_INPUT,
+        .pull_up_en   = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_NEGEDGE,
+    };
+    ESP_ERROR_CHECK(gpio_config(&button_gpio_cfg));
+
+    TaskHandle_t h_sensor = nullptr, h_display = nullptr, h_network = nullptr, h_button = nullptr;
     xTaskCreate(taskSensor, "sensor", Cfg::TASK_STACK_SENSOR_WORDS, nullptr,
                 Cfg::TASK_PRIO_SENSOR, &h_sensor);
     xTaskCreate(taskDisplay, "display", Cfg::TASK_STACK_DISPLAY_WORDS, nullptr,
                 Cfg::TASK_PRIO_DISPLAY, &h_display);
     xTaskCreate(taskNetwork, "network", Cfg::TASK_STACK_NETWORK_WORDS, nullptr,
                 Cfg::TASK_PRIO_NETWORK, &h_network);
+    xTaskCreate(taskButton, "button", Cfg::TASK_STACK_BUTTON_WORDS, nullptr,
+                Cfg::TASK_PRIO_BUTTON, &h_button);
+
+    ESP_ERROR_CHECK(gpio_install_isr_service(0));
+    ESP_ERROR_CHECK(gpio_isr_handler_add(static_cast<gpio_num_t>(Cfg::SHUTDOWN_BUTTON_PIN),
+                                          taskButtonIsr, h_button));
 
     const uint32_t display_period_ms = std::clamp(Cfg::DISPLAY_UPDATE_INTERVAL_MS,
                                                     Cfg::LCD_MIN_INTERVAL_MS,

@@ -7,7 +7,6 @@ struct AirData {
     float temperature;
     float humidity;
     float pressure;
-    float gas_resistance;
 
     uint16_t pm1_0;
     uint16_t pm2_5;

@@ -40,8 +40,7 @@ private:
     int64_t   boot_time_us_;
 
     esp_err_t bme680Setup();
-    esp_err_t bme680ReadOnce(float &t_c, float &rh, float &p_hpa,
-                             float &gas_ohm, bool &heater_ok);
+    esp_err_t bme680ReadOnce(float &t_c, float &rh, float &p_hpa);
 
     esp_err_t pmsInit();
     esp_err_t pmsReadFrame(uint16_t &pm1, uint16_t &pm25, uint16_t &pm10);

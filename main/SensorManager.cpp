@@ -88,21 +88,15 @@ esp_err_t SensorManager::readAll(AirData &data) {
 
     const uint32_t up_ms = elapsedMs();
 
-    float t = 0, rh = 0, p = 0, gas = 0;
-    bool  heater_ok = false;
-    esp_err_t err = bme680ReadOnce(t, rh, p, gas, heater_ok);
+    float t = 0, rh = 0, p = 0;
+    esp_err_t err = bme680ReadOnce(t, rh, p);
     const bool bme_ok = (err == ESP_OK);
     if (bme_ok) {
-        data.temperature    = t;
-        data.humidity       = rh;
-        data.pressure       = p;
-        data.gas_resistance = gas;
+        data.temperature = t;
+        data.humidity    = rh;
+        data.pressure    = p;
 
-        data.bme680_ready = (up_ms >= Cfg::BME680_WARMUP_MS)
-                           && heater_ok
-                           && (gas > 0.0f);
-
-        bme680_set_ambient_temperature(&bme680_dev_, static_cast<int16_t>(t));
+        data.bme680_ready = (up_ms >= Cfg::BME680_WARMUP_MS);
     } else {
         ESP_LOGW(TAG, "Đọc BME680 thất bại (%s) — giữ giá trị 0", esp_err_to_name(err));
     }
@@ -180,25 +174,14 @@ esp_err_t SensorManager::bme680Setup() {
     err = bme680_set_filter_size(&bme680_dev_, BME680_IIR_SIZE_3);
     if (err != ESP_OK) return err;
 
-    err = bme680_set_heater_profile(&bme680_dev_, 0,
-                                    Cfg::BME680_HEATER_TEMP_C,
-                                    Cfg::BME680_HEATER_DUR_MS);
-    if (err != ESP_OK) return err;
-    err = bme680_use_heater_profile(&bme680_dev_, 0);
+    err = bme680_use_heater_profile(&bme680_dev_, BME680_HEATER_NOT_USED);
     if (err != ESP_OK) return err;
 
-    err = bme680_set_ambient_temperature(&bme680_dev_, Cfg::BME680_AMBIENT_TEMP_C);
-    if (err != ESP_OK) return err;
-
-    ESP_LOGI(TAG, "BME680 sẵn sàng (addr 0x%02X, heater %u°C/%ums)",
-             Cfg::BME680_I2C_ADDR,
-             (unsigned)Cfg::BME680_HEATER_TEMP_C,
-             (unsigned)Cfg::BME680_HEATER_DUR_MS);
+    ESP_LOGI(TAG, "BME680 sẵn sàng (addr 0x%02X)", Cfg::BME680_I2C_ADDR);
     return ESP_OK;
 }
 
-esp_err_t SensorManager::bme680ReadOnce(float &t_c, float &rh, float &p_hpa,
-                                        float &gas_ohm, bool &heater_ok) {
+esp_err_t SensorManager::bme680ReadOnce(float &t_c, float &rh, float &p_hpa) {
 
     uint32_t dur_ticks = 0;
     esp_err_t err = bme680_get_measurement_duration(&bme680_dev_, &dur_ticks);
@@ -213,11 +196,9 @@ esp_err_t SensorManager::bme680ReadOnce(float &t_c, float &rh, float &p_hpa,
     err = bme680_get_results_float(&bme680_dev_, &r);
     if (err != ESP_OK) return err;
 
-    t_c       = r.temperature;
-    rh        = r.humidity;
-    p_hpa     = r.pressure;
-    gas_ohm   = r.gas_resistance;
-    heater_ok = (r.gas_resistance > 0.0f);
+    t_c   = r.temperature;
+    rh    = r.humidity;
+    p_hpa = r.pressure;
     return ESP_OK;
 }
 

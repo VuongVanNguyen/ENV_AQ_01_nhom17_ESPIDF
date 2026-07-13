@@ -32,14 +32,6 @@ inline constexpr int      PMS_FRAME_LEN     = 32;
 inline constexpr int      PMS_VALID_STREAK_OK = 3;
 
 // ============================================================
-// 2b. BME680 — Cấu hình đo (Bosch ref + thư viện esp-idf-lib/bme680)
-// ============================================================
-
-inline constexpr uint16_t BME680_HEATER_TEMP_C  = 320;
-inline constexpr uint16_t BME680_HEATER_DUR_MS  = 150;
-inline constexpr int16_t  BME680_AMBIENT_TEMP_C = 25;
-
-// ============================================================
 // 3. MQ-135 — ADC
 // ============================================================
 

@@ -63,7 +63,6 @@ inline constexpr float    MQ135_CURVE_A     = 110.47f;
 inline constexpr float    MQ135_CURVE_B     = -2.8612f;
 
 inline constexpr float    MQ135_TREF_C      = 20.0f;
-inline constexpr float    MQ135_RHREF_PCT   = 65.0f;
 inline constexpr float    MQ135_CORA        =  0.00035f;
 inline constexpr float    MQ135_CORB        =  0.02718f;
 inline constexpr float    MQ135_CORC        =  1.39538f;

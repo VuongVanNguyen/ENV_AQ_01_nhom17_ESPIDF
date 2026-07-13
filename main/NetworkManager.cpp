@@ -1,7 +1,6 @@
 #include "NetworkManager.hpp"
 
 #include "esp_log.h"
-#include "esp_system.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
 #include "esp_netif_sntp.h"
@@ -320,10 +319,7 @@ void NetworkManager::sntpSyncCb(struct timeval *) {
 
 void NetworkManager::dispatchCommand(const char *cmd) {
 
-    if (std::strcmp(cmd, "reboot") == 0) {
-        ESP_LOGW(TAG, "Thực thi lệnh reboot...");
-        esp_restart();
-    } else if (cmd_callback_) {
+    if (cmd_callback_) {
         cmd_callback_(cmd);
     } else {
         ESP_LOGW(TAG, "Lệnh '%s' không có handler — đăng ký setCommandCallback()", cmd);

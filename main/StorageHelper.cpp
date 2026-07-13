@@ -27,7 +27,7 @@ static constexpr const char *kEventHeader =
     "timestamp,time_valid,event,alert_level,alert_reason,alert_flags,"
     "calib_needed,calib_reason\n";
 
-enum class MsgKind : uint8_t { DATA, EVENT, OFFLINE_PUSH, OFFLINE_DRAIN };
+enum class MsgKind : uint8_t { DATA, EVENT, OFFLINE_PUSH, OFFLINE_DRAIN, SHUTDOWN };
 
 struct StorageMsg {
     MsgKind   kind;
@@ -62,6 +62,7 @@ StorageHelper::StorageHelper()
     : card_(nullptr),
       storage_queue_(nullptr),
       storage_task_(nullptr),
+      shutdown_done_(nullptr),
       mounted_(false),
       offline_count_(0),
       dropped_data_(0),
@@ -79,6 +80,9 @@ StorageHelper::~StorageHelper() {
     if (storage_queue_) {
         vQueueDelete(storage_queue_);
     }
+    if (shutdown_done_) {
+        vSemaphoreDelete(shutdown_done_);
+    }
     if (mounted_ && card_) {
         esp_vfs_fat_sdcard_unmount(Cfg::SD_MOUNT_POINT, card_);
     }
@@ -88,6 +92,12 @@ esp_err_t StorageHelper::init() {
     storage_queue_ = xQueueCreate(Cfg::STORAGE_QUEUE_LEN, sizeof(StorageMsg));
     if (!storage_queue_) {
         ESP_LOGE(TAG, "Không thể tạo storage_queue_ (ESP_ERR_NO_MEM)");
+        return ESP_ERR_NO_MEM;
+    }
+
+    shutdown_done_ = xSemaphoreCreateBinary();
+    if (!shutdown_done_) {
+        ESP_LOGE(TAG, "Không thể tạo shutdown_done_ (ESP_ERR_NO_MEM)");
         return ESP_ERR_NO_MEM;
     }
 
@@ -704,6 +714,26 @@ esp_err_t StorageHelper::drainOffline(PublishFn publish_fn) {
     return ESP_OK;
 }
 
+esp_err_t StorageHelper::prepareShutdown() {
+    if (!mounted_) return ESP_OK;
+
+    StorageMsg msg{};
+    msg.kind = MsgKind::SHUTDOWN;
+
+    if (xQueueSend(storage_queue_, &msg, pdMS_TO_TICKS(500)) != pdTRUE) {
+        ESP_LOGW(TAG, "storage_queue_ đầy — drop prepareShutdown request");
+        return ESP_ERR_TIMEOUT;
+    }
+
+    if (xSemaphoreTake(shutdown_done_, pdMS_TO_TICKS(Cfg::SD_SHUTDOWN_TIMEOUT_MS)) != pdTRUE) {
+        ESP_LOGW(TAG, "prepareShutdown timeout sau %ums", (unsigned)Cfg::SD_SHUTDOWN_TIMEOUT_MS);
+        return ESP_ERR_TIMEOUT;
+    }
+
+    ESP_LOGI(TAG, "SD đã unmount an toàn — sẵn sàng rút nguồn");
+    return ESP_OK;
+}
+
 bool StorageHelper::isMounted() const { return mounted_; }
 
 size_t StorageHelper::offlineCount() const { return offline_count_; }
@@ -732,6 +762,14 @@ void StorageHelper::taskLoop() {
                 break;
             case MsgKind::OFFLINE_DRAIN:
                 drainOfflineRecords(drain_publish_fn_);
+                break;
+            case MsgKind::SHUTDOWN:
+                if (mounted_ && card_) {
+                    esp_vfs_fat_sdcard_unmount(Cfg::SD_MOUNT_POINT, card_);
+                    card_ = nullptr;
+                }
+                mounted_ = false;
+                xSemaphoreGive(shutdown_done_);
                 break;
         }
     }

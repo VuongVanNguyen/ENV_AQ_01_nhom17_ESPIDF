@@ -9,6 +9,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 
 #include <cstdint>
 #include <cstddef>
@@ -50,6 +51,8 @@ public:
 
     esp_err_t drainOffline(PublishFn publish_fn);
 
+    esp_err_t prepareShutdown();
+
     bool   isMounted() const;
     size_t offlineCount() const;
 
@@ -58,6 +61,7 @@ private:
     sdmmc_card_t *card_;
     QueueHandle_t storage_queue_;
     TaskHandle_t  storage_task_;
+    SemaphoreHandle_t shutdown_done_;
     volatile bool mounted_;
     size_t        offline_count_;
     uint32_t      dropped_data_;

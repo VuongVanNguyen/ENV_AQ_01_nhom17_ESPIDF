@@ -72,6 +72,8 @@ inline constexpr int      SD_SPI_MISO_PIN   = 19;
 inline constexpr int      SD_SPI_MOSI_PIN   = 23;
 inline constexpr int      SD_SPI_CS_PIN     = 5;
 inline constexpr int      SD_SPI_HOST       = 1;
+inline constexpr uint32_t SD_SHUTDOWN_TIMEOUT_MS = 3'000;
+inline constexpr uint32_t SHUTDOWN_LED_BLINK_MS  = 300;
 
 inline constexpr const char *SD_MOUNT_POINT    = "/sdcard";
 inline constexpr const char *SD_LOG_FILE       = "/sdcard/airdata.csv";
@@ -128,7 +130,7 @@ inline constexpr uint32_t SENSOR_MAX_INTERVAL_MS     = ALERT_MAX_LATENCY_MS - MA
 
 inline constexpr uint32_t LCD_OVERLAY_MIN_MS         = 5'000;
 
-inline constexpr uint32_t BME680_WARMUP_MS           = 300'000;
+inline constexpr uint32_t BME680_WARMUP_MS           = 2'000;
 inline constexpr uint32_t PMS5003_WARMUP_MS          = 30'000;
 inline constexpr uint32_t MQ135_WARMUP_MS            = 1'200'000;
 

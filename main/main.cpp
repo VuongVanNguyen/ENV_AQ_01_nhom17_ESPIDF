@@ -40,6 +40,7 @@ enum class DisplayNotice : uint8_t { NET_LOST = 0, NET_RESTORED = 1 };
 static QueueHandle_t      s_display_notice = nullptr;
 
 static std::atomic<bool>  s_force_skip_warmup{false};
+static std::atomic<bool>  s_shutdown_requested{false};
 
 static int64_t nowUnixOrUptime() {
     if (s_network.isTimeSynced()) {
@@ -115,7 +116,9 @@ static void taskSensor(void *) {
 
         xQueueOverwrite(s_airq, &local);
 
-        driveAlertOutputs(local);
+        if (!s_shutdown_requested.load()) {
+            driveAlertOutputs(local);
+        }
 
         if (local.calib_needed && !prev_calib_needed) {
             s_storage.logEvent(StorageHelper::EventType::CALIB_NEEDED_SET, local);
@@ -277,6 +280,28 @@ extern "C" void app_main() {
     }
 
     s_network.setCommandCallback([](const char *cmd) {
+        if (std::strcmp(cmd, "reboot") == 0) {
+            ESP_LOGW(TAG, "Thực thi lệnh reboot...");
+            s_storage.prepareShutdown();
+            esp_restart();
+            return;
+        }
+
+        if (std::strcmp(cmd, "shutdown") == 0) {
+            ESP_LOGW(TAG, "Thực thi lệnh shutdown...");
+            s_shutdown_requested.store(true);
+            gpio_set_level(static_cast<gpio_num_t>(Cfg::LED_RED_PIN), 0);
+            gpio_set_level(static_cast<gpio_num_t>(Cfg::LED_YELLOW_PIN), 0);
+            gpio_set_level(static_cast<gpio_num_t>(Cfg::BUZZER_PIN), 0);
+            s_storage.prepareShutdown();
+            for (;;) {
+                gpio_set_level(static_cast<gpio_num_t>(Cfg::LED_GREEN_PIN), 1);
+                vTaskDelay(pdMS_TO_TICKS(Cfg::SHUTDOWN_LED_BLINK_MS));
+                gpio_set_level(static_cast<gpio_num_t>(Cfg::LED_GREEN_PIN), 0);
+                vTaskDelay(pdMS_TO_TICKS(Cfg::SHUTDOWN_LED_BLINK_MS));
+            }
+        }
+
         if (std::strcmp(cmd, "skip_warmup") == 0) {
             s_force_skip_warmup.store(true);
 

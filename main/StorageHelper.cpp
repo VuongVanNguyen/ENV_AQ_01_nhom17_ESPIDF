@@ -9,12 +9,14 @@
 #include <cstring>
 #include <cmath>
 #include <cerrno>
+#include <ctime>
 #include <sys/stat.h>
 #include <unistd.h>
 
 static const char *TAG = "StorageHelper";
 
 static constexpr int64_t kY2020Epoch = 1577836800;
+static constexpr int32_t kFallbackLogKey = -1;
 
 static constexpr const char *kDataHeader =
     "timestamp,time_valid,temperature,humidity,pressure,"
@@ -50,7 +52,7 @@ static void fmtFloat(float v, int prec, char *buf, size_t n) {
 }
 
 static void rotatedPath(char *out, size_t out_sz, int n) {
-    const char *base = Cfg::SD_LOG_FILE;
+    const char *base = Cfg::SD_LOG_FALLBACK_FILE;
     const char *ext = strrchr(base, '.');
     size_t base_len = ext ? static_cast<size_t>(ext - base) : strlen(base);
     if (base_len >= out_sz) base_len = out_sz - 1;
@@ -71,7 +73,9 @@ StorageHelper::StorageHelper()
       event_file_bytes_(0),
       data_rows_pending_fsync_(0),
       drain_publish_fn_(nullptr),
-      last_log_timestamp_(0) {}
+      last_log_timestamp_(0),
+      active_log_day_(INT32_MIN),
+      active_log_path_{} {}
 
 StorageHelper::~StorageHelper() {
     if (storage_task_) {
@@ -110,15 +114,13 @@ esp_err_t StorageHelper::init() {
         mounted_ = true;
         sdmmc_card_print_info(stdout, card_);
 
-        ensureHeader(Cfg::SD_LOG_FILE, kDataHeader, data_file_bytes_);
         ensureHeader(Cfg::SD_EVENT_LOG_FILE, kEventHeader, event_file_bytes_);
 
         restoreOfflineState();
 
         ESP_LOGI(TAG,
-                 "SD mounted OK — airdata.csv=%ld B, events.csv=%ld B, "
-                 "offline_count=%u",
-                 data_file_bytes_, event_file_bytes_,
+                 "SD mounted OK — events.csv=%ld B, offline_count=%u",
+                 event_file_bytes_,
                  static_cast<unsigned>(offline_count_));
     }
 
@@ -200,6 +202,23 @@ esp_err_t StorageHelper::ensureHeader(const char *path, const char *header,
     return ESP_OK;
 }
 
+void StorageHelper::buildLogPath(int64_t timestamp, char *out, size_t out_sz,
+                                  int32_t &day_key) {
+    if (timeValidOf(timestamp)) {
+        time_t t = static_cast<time_t>(timestamp);
+        struct tm tm_info{};
+        localtime_r(&t, &tm_info);
+        day_key = (tm_info.tm_year + 1900) * 10000 +
+                  (tm_info.tm_mon + 1) * 100 + tm_info.tm_mday;
+        snprintf(out, out_sz, "%s/%02d%02d%02d.csv", Cfg::SD_MOUNT_POINT,
+                 (tm_info.tm_year + 1900) % 100, tm_info.tm_mon + 1,
+                 tm_info.tm_mday);
+    } else {
+        day_key = kFallbackLogKey;
+        snprintf(out, out_sz, "%s", Cfg::SD_LOG_FALLBACK_FILE);
+    }
+}
+
 esp_err_t StorageHelper::writeDataRow(const AirData &data) {
     if (!mounted_) return ESP_ERR_INVALID_STATE;
 
@@ -208,6 +227,16 @@ esp_err_t StorageHelper::writeDataRow(const AirData &data) {
         if (delta_ms < static_cast<int64_t>(Cfg::SD_LOG_INTERVAL_MS)) {
             return ESP_OK;
         }
+    }
+
+    int32_t day_key;
+    char path[sizeof(active_log_path_)];
+    buildLogPath(data.timestamp, path, sizeof(path), day_key);
+    if (day_key != active_log_day_) {
+        strncpy(active_log_path_, path, sizeof(active_log_path_) - 1);
+        active_log_path_[sizeof(active_log_path_) - 1] = '\0';
+        active_log_day_ = day_key;
+        ensureHeader(active_log_path_, kDataHeader, data_file_bytes_);
     }
 
     char t_buf[16], h_buf[16], p_buf[16], co2_buf[16], aqi_buf[16], ci_buf[16];
@@ -222,9 +251,9 @@ esp_err_t StorageHelper::writeDataRow(const AirData &data) {
     csvEscape(data.alert_reason, alert_reason_esc, sizeof(alert_reason_esc));
     csvEscape(data.calib_reason, calib_reason_esc, sizeof(calib_reason_esc));
 
-    FILE *f = fopen(Cfg::SD_LOG_FILE, "a");
+    FILE *f = fopen(active_log_path_, "a");
     if (!f) {
-        ESP_LOGE(TAG, "Không thể mở %s để ghi", Cfg::SD_LOG_FILE);
+        ESP_LOGE(TAG, "Không thể mở %s để ghi", active_log_path_);
         return ESP_FAIL;
     }
 
@@ -248,7 +277,7 @@ esp_err_t StorageHelper::writeDataRow(const AirData &data) {
         data.data_valid ? 1 : 0, static_cast<unsigned>(data.cycle_time_ms));
 
     if (n < 0) {
-        ESP_LOGE(TAG, "fprintf lỗi khi ghi %s", Cfg::SD_LOG_FILE);
+        ESP_LOGE(TAG, "fprintf lỗi khi ghi %s", active_log_path_);
         fclose(f);
         return ESP_FAIL;
     }
@@ -264,7 +293,7 @@ esp_err_t StorageHelper::writeDataRow(const AirData &data) {
     }
     fclose(f);
 
-    if (data_file_bytes_ >= Cfg::SD_LOG_MAX_BYTES) {
+    if (day_key == kFallbackLogKey && data_file_bytes_ >= Cfg::SD_LOG_MAX_BYTES) {
         rotateDataLog(data);
     }
 
@@ -284,16 +313,16 @@ esp_err_t StorageHelper::rotateDataLog(const AirData &data) {
     }
 
     rotatedPath(dst, sizeof(dst), 1);
-    if (rename(Cfg::SD_LOG_FILE, dst) != 0) {
+    if (rename(Cfg::SD_LOG_FALLBACK_FILE, dst) != 0) {
         ESP_LOGW(TAG, "Rotate: rename %s -> %s lỗi (errno=%d)",
-                 Cfg::SD_LOG_FILE, dst, errno);
+                 Cfg::SD_LOG_FALLBACK_FILE, dst, errno);
     }
 
     data_file_bytes_ = 0;
     data_rows_pending_fsync_ = 0;
-    esp_err_t err = ensureHeader(Cfg::SD_LOG_FILE, kDataHeader, data_file_bytes_);
+    esp_err_t err = ensureHeader(Cfg::SD_LOG_FALLBACK_FILE, kDataHeader, data_file_bytes_);
 
-    ESP_LOGI(TAG, "SD_LOG_FILE rotated (> %ld B) -> %s",
+    ESP_LOGI(TAG, "SD_LOG_FALLBACK_FILE rotated (> %ld B) -> %s",
              static_cast<long>(Cfg::SD_LOG_MAX_BYTES), dst);
 
     writeEventRow(EventType::SD_LOG_ROTATED, data);

@@ -73,6 +73,9 @@ private:
     PublishFn drain_publish_fn_;
     int64_t   last_log_timestamp_;
 
+    int32_t   active_log_day_;
+    char      active_log_path_[32];
+
     static void taskStorage(void *arg);
     void taskLoop();
 
@@ -82,6 +85,8 @@ private:
     esp_err_t writeDataRow(const AirData &data);
     esp_err_t writeEventRow(EventType type, const AirData &snapshot);
     esp_err_t rotateDataLog(const AirData &data);
+
+    static void buildLogPath(int64_t timestamp, char *out, size_t out_sz, int32_t &day_key);
 
     esp_err_t pushOfflineRecord(const AirData &data);
     esp_err_t drainOfflineRecords(const PublishFn &publish_fn);

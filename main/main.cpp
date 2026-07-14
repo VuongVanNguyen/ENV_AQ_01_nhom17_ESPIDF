@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 
@@ -288,6 +289,9 @@ extern "C" void app_main() {
     //   khi tạo task/driver. Chỉ làm sau khi đo công suất thực tế cho thấy cần
     //   thiết — tickless idle có thể ảnh hưởng timing UART (PMS5003) và I2C
     //   (BME680/PCF8574), cần test kỹ trước khi bật production.
+
+    setenv("TZ", "ICT-7", 1);
+    tzset();
 
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {

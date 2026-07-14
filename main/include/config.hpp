@@ -76,7 +76,7 @@ inline constexpr uint32_t SD_SHUTDOWN_TIMEOUT_MS = 3'000;
 inline constexpr uint32_t SHUTDOWN_LED_BLINK_MS  = 300;
 
 inline constexpr const char *SD_MOUNT_POINT    = "/sdcard";
-inline constexpr const char *SD_LOG_FILE       = "/sdcard/airdata.csv";
+inline constexpr const char *SD_LOG_FALLBACK_FILE = "/sdcard/unsynced.csv";
 inline constexpr const char *SD_OFFLINE_QUEUE  = "/sdcard/offline_queue.bin";
 
 inline constexpr const char *SD_EVENT_LOG_FILE = "/sdcard/events.csv";

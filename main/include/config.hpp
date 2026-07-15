@@ -197,6 +197,8 @@ inline constexpr const char *NTP_SERVER_URL    = CONFIG_NTP_SERVER_URL;
 inline constexpr int         MQTT_JSON_BUF_LEN = 640;
 
 inline constexpr uint32_t    MQTT_OUTBOX_LIMIT_BYTES = 16 * 1024;
+inline constexpr int         MQTT_NETWORK_TIMEOUT_MS = 4000;
+inline constexpr int         MQTT_KEEPALIVE_SEC      = 30;
 
 // ============================================================
 // 12. BỘ LỌC NHIỄU (Filters) — EMA/SMA hai tầng

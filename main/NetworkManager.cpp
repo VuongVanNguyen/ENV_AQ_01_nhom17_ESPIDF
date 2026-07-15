@@ -121,6 +121,9 @@ esp_err_t NetworkManager::initMqtt() {
 
     cfg.network.disable_auto_reconnect = false;
     cfg.network.reconnect_timeout_ms   = 3000;
+    cfg.network.timeout_ms             = Cfg::MQTT_NETWORK_TIMEOUT_MS;
+
+    cfg.session.keepalive              = Cfg::MQTT_KEEPALIVE_SEC;
 
     cfg.network.tcp_keep_alive_cfg.keep_alive_enable   = true;
     cfg.network.tcp_keep_alive_cfg.keep_alive_idle     = 20;

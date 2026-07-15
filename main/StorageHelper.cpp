@@ -285,13 +285,23 @@ esp_err_t StorageHelper::writeDataRow(const AirData &data) {
     data_file_bytes_ += n;
     last_log_timestamp_ = data.timestamp;
 
+    bool write_err = false;
     data_rows_pending_fsync_++;
     if (data_rows_pending_fsync_ >= Cfg::SD_FSYNC_EVERY_N_ROWS) {
-        fflush(f);
-        fsync(fileno(f));
+        if (fflush(f) != 0 || fsync(fileno(f)) != 0) {
+            write_err = true;
+        }
         data_rows_pending_fsync_ = 0;
     }
-    fclose(f);
+    if (fclose(f) != 0) {
+        write_err = true;
+    }
+
+    if (write_err) {
+        ESP_LOGE(TAG, "Ghi %s thất bại (errno=%d) — có thể thẻ đầy hoặc lỗi phần cứng",
+                 active_log_path_, errno);
+        return ESP_FAIL;
+    }
 
     if (day_key == kFallbackLogKey && data_file_bytes_ >= Cfg::SD_LOG_MAX_BYTES) {
         rotateDataLog(data);
@@ -358,9 +368,16 @@ esp_err_t StorageHelper::writeEventRow(EventType type,
         return ESP_FAIL;
     }
 
-    fflush(f);
-    fsync(fileno(f));
-    fclose(f);
+    bool write_err = (fflush(f) != 0) || (fsync(fileno(f)) != 0);
+    if (fclose(f) != 0) {
+        write_err = true;
+    }
+
+    if (write_err) {
+        ESP_LOGE(TAG, "Ghi %s thất bại (errno=%d) — có thể thẻ đầy hoặc lỗi phần cứng",
+                 Cfg::SD_EVENT_LOG_FILE, errno);
+        return ESP_FAIL;
+    }
 
     event_file_bytes_ += n;
     if (event_file_bytes_ >= Cfg::SD_EVENT_MAX_BYTES) {

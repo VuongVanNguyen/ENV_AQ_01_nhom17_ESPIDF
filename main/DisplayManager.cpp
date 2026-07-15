@@ -144,7 +144,6 @@ int DisplayManager::calibAlertRow(const char *reason) const {
 
         case ScreenPage::MAIN_CO2_PM:
             if (match("CALIB_DRIFT_CO2")) return 0;
-            if (match("CALIB_DRIFT_PM25") || match("CALIB_DRIFT_PM10")) return 1;
             if (match("CALIB_OVERDUE_30D")) return 0;
             return -1;
 

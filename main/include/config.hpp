@@ -140,12 +140,12 @@ inline constexpr uint32_t PMS5003_WARMUP_MS          = 30'000;
 inline constexpr uint32_t MQ135_WARMUP_MS            = 1'200'000;
 
 // ============================================================
-// 7. AQI — ĐIỂM GÃY NỘI SUY & NGƯỠNG PHÂN LOẠI (tiêu chuẩn VN)
+// 7. AQI — ĐIỂM GÃY NỘI SUY & NGƯỠNG PHÂN LOẠI (tiêu chuẩn US EPA)
 // ============================================================
 
-inline constexpr float    AQI_INDEX_BP[]   = {0.0f, 50.0f, 100.0f, 150.0f, 200.0f, 300.0f, 500.0f};
-inline constexpr float    AQI_PM25_BP[]    = {0.0f, 25.0f, 50.0f, 80.0f, 150.0f, 250.0f, 500.0f};
-inline constexpr float    AQI_PM10_BP[]    = {0.0f, 50.0f, 150.0f, 250.0f, 350.0f, 420.0f, 600.0f};
+inline constexpr float    AQI_INDEX_BP[]   = {0.0f, 50.0f, 100.0f, 150.0f, 200.0f, 300.0f, 400.0f, 500.0f};
+inline constexpr float    AQI_PM25_BP[]    = {0.0f, 9.0f, 35.4f, 55.4f, 125.4f, 225.4f, 275.4f, 325.4f};
+inline constexpr float    AQI_PM10_BP[]    = {0.0f, 54.0f, 154.0f, 254.0f, 354.0f, 424.0f, 504.0f, 604.0f};
 inline constexpr float    AQI_MAX_INDEX    = 500.0f;
 
 inline constexpr float    AQI_GOOD_MAX     = static_cast<float>(CONFIG_AQI_GOOD_MAX);
@@ -249,8 +249,6 @@ inline constexpr float    DRIFT_HUMI_ABS_PCT   = ACCURACY_HUMI_RH;
 inline constexpr const char *NVS_NAMESPACE         = "aq01_calib";
 inline constexpr const char *NVS_KEY_BL_TEMP       = "bl_temp";
 inline constexpr const char *NVS_KEY_BL_HUMI       = "bl_humi";
-inline constexpr const char *NVS_KEY_BL_PM25       = "bl_pm25";
-inline constexpr const char *NVS_KEY_BL_PM10       = "bl_pm10";
 inline constexpr const char *NVS_KEY_BL_CO2        = "bl_co2";
 inline constexpr const char *NVS_KEY_BL_PRESSURE   = "bl_press";
 inline constexpr const char *NVS_KEY_BL_AQI        = "bl_aqi";

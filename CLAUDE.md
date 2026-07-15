@@ -3,7 +3,7 @@
 File này cung cấp hướng dẫn cho Claude khi làm việc trong repository của dự án ENV-AQ-01: Trạm Quan Trắc Không Khí Đa Thông Số.
 
 ## 1. Tổng quan dự án (Project Overview)
-Hệ thống quan trắc dựa trên ESP32, thu thập dữ liệu từ BME680, PMS5003, và MQ-135. Tính toán các chỉ số đầu ra: **AQI** (theo tiêu chuẩn Việt Nam), **Comfort Index** (THI — Temperature-Humidity Index, từ nhiệt độ và độ ẩm), **nồng độ CO2**, cùng Nhiệt độ (T), Độ ẩm (RH) và Áp suất (P); hiển thị lên LCD và truyền dữ liệu qua MQTT. Không còn tính chỉ số TVOC.
+Hệ thống quan trắc dựa trên ESP32, thu thập dữ liệu từ BME680, PMS5003, và MQ-135. Tính toán các chỉ số đầu ra: **AQI** (theo tiêu chuẩn US EPA), **Comfort Index** (THI — Temperature-Humidity Index, từ nhiệt độ và độ ẩm), **nồng độ CO2**, cùng Nhiệt độ (T), Độ ẩm (RH) và Áp suất (P); hiển thị lên LCD và truyền dữ liệu qua MQTT. Không còn tính chỉ số TVOC.
 - **Framework:** ESP-IDF (Espressif IoT Development Framework), phát triển thông qua **ESP-IDF Extension trên Visual Studio Code**.
 - **Build System:** CMake + Ninja (được quản lý bởi ESP-IDF toolchain).
 - **Ngôn ngữ lập trình:** C++ (chuẩn C++17), sử dụng trực tiếp ESP-IDF APIs — không dùng Arduino HAL hay bất kỳ Arduino wrapper nào. Lý do chọn C++: kiến trúc đa module của dự án (SensorManager, NetworkManager, Filters...) hưởng lợi rõ từ encapsulation (class), RAII, và STL (`std::queue` cho Offline Buffer, `std::array` cho filter window). Overhead RAM/Flash của C++ trên ESP32 (520KB SRAM, 4MB+ Flash) là không đáng kể. Entry point bắt buộc khai báo `extern "C" void app_main()`.
@@ -45,7 +45,7 @@ project_root/
 | :--- | :--- | :--- |
 | `main/SensorManager.cpp` | Driver BME680 (I2C), PMS5003 (UART), MQ-135 (ADC). | `bme680` + `i2cdev` (esp-idf-lib), `uart_*`, `adc_oneshot_*` |
 | `main/Filters.cpp` | Lọc nhiễu tín hiệu cảm biến: EMA cho T/P/Gas (BME680), SMA cho RH (BME680). Outlier rejection dùng sanity check theo range vật lý — không dùng delta-based threshold. | — |
-| `main/DataFusion.cpp` | Hợp nhất dữ liệu, tính AQI (VN) và Comfort Index theo công thức/thang đo THI (Temperature-Humidity Index, từ T/RH); Drift Self-Check. Không tính TVOC. | — |
+| `main/DataFusion.cpp` | Hợp nhất dữ liệu, tính AQI (US EPA) và Comfort Index theo công thức/thang đo THI (Temperature-Humidity Index, từ T/RH); Drift Self-Check. Không tính TVOC. | — |
 | `main/DisplayManager.cpp` | Điều khiển LCD 16x2 thông qua IC mở rộng chân PCF8574 (I2C). Hiển thị 3 chỉ số chính AQI, THI (Comfort Index), CO2; thêm T/RH nếu vừa màn hình, nếu không thì luân phiên (rotate) trang hiển thị. | `i2c_master_*` |
 | `main/NetworkManager.cpp` | Quản lý WiFi, MQTT (JSON payload), xử lý Buffer khi mất mạng. | `esp_wifi_*`, `esp_mqtt_client_*` |
 | `main/StorageHelper.cpp` | Ghi log dữ liệu định kỳ vào thẻ SD (`.csv`) và ghi nhật ký sự kiện (Event Log) rời rạc. | `esp_vfs_fat_sdmmc_mount`, `sdmmc_*` |

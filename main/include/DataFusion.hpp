@@ -70,8 +70,6 @@ private:
     struct Baseline {
         float temperature;
         float humidity;
-        float pm25;
-        float pm10;
         float co2;
         float pressure;
         float aqi;

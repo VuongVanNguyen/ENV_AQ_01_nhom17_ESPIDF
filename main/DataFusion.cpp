@@ -134,8 +134,6 @@ esp_err_t DataFusion::confirmRecalibration(AirData &data, bool time_synced) {
         baseline_mask_ |= BASELINE_BME680_BIT;
     }
     if (data.pms5003_ready) {
-        baseline_.pm25 = static_cast<float>(data.pm2_5);
-        baseline_.pm10 = static_cast<float>(data.pm10);
         baseline_.aqi = data.aqi;
         baseline_mask_ |= BASELINE_PMS5003_BIT;
     }
@@ -200,8 +198,6 @@ esp_err_t DataFusion::loadBaseline() {
 
     float temp = 0.0f;
     float humi = 0.0f;
-    float pm25 = 0.0f;
-    float pm10 = 0.0f;
     float co2 = 0.0f;
     float press = 0.0f;
     float aqi = 0.0f;
@@ -216,18 +212,6 @@ esp_err_t DataFusion::loadBaseline() {
 
     sz = sizeof(float);
     err = nvs_get_blob(nvs_handle_, Cfg::NVS_KEY_BL_HUMI, &humi, &sz);
-    if (err != ESP_OK || sz != sizeof(float)) {
-        return err == ESP_OK ? ESP_ERR_INVALID_STATE : err;
-    }
-
-    sz = sizeof(float);
-    err = nvs_get_blob(nvs_handle_, Cfg::NVS_KEY_BL_PM25, &pm25, &sz);
-    if (err != ESP_OK || sz != sizeof(float)) {
-        return err == ESP_OK ? ESP_ERR_INVALID_STATE : err;
-    }
-
-    sz = sizeof(float);
-    err = nvs_get_blob(nvs_handle_, Cfg::NVS_KEY_BL_PM10, &pm10, &sz);
     if (err != ESP_OK || sz != sizeof(float)) {
         return err == ESP_OK ? ESP_ERR_INVALID_STATE : err;
     }
@@ -271,8 +255,6 @@ esp_err_t DataFusion::loadBaseline() {
 
     baseline_.temperature = temp;
     baseline_.humidity = humi;
-    baseline_.pm25 = pm25;
-    baseline_.pm10 = pm10;
     baseline_.co2 = co2;
     baseline_.pressure = press;
     baseline_.aqi = aqi;
@@ -300,14 +282,6 @@ esp_err_t DataFusion::writeBaselineToNvs(const Baseline &bl, uint8_t mask, int64
         return err;
     }
     err = nvs_set_blob(nvs_handle_, Cfg::NVS_KEY_BL_HUMI, &bl.humidity, sizeof(bl.humidity));
-    if (err != ESP_OK) {
-        return err;
-    }
-    err = nvs_set_blob(nvs_handle_, Cfg::NVS_KEY_BL_PM25, &bl.pm25, sizeof(bl.pm25));
-    if (err != ESP_OK) {
-        return err;
-    }
-    err = nvs_set_blob(nvs_handle_, Cfg::NVS_KEY_BL_PM10, &bl.pm10, sizeof(bl.pm10));
     if (err != ESP_OK) {
         return err;
     }
@@ -389,8 +363,6 @@ void DataFusion::initializeBaselineGroup(uint8_t group_bit, const AirData &data,
             group_name = "BME680";
             break;
         case BASELINE_PMS5003_BIT:
-            baseline_.pm25 = static_cast<float>(data.pm2_5);
-            baseline_.pm10 = static_cast<float>(data.pm10);
             baseline_.aqi = data.aqi;
             group_name = "PMS5003";
             break;
@@ -527,22 +499,6 @@ void DataFusion::driftSelfCheck(AirData &data, bool time_synced) {
         if (dev_abs > Cfg::DRIFT_HUMI_ABS_PCT) {
             drift = true;
             setReason("CALIB_DRIFT_HUMI");
-        }
-    }
-
-    if (!drift && data.pms5003_ready && pms5003_base && hasFiniteValue(data.pm2_5) && local_baseline.pm25 != 0.0f) {
-        const float dev = fabsf(static_cast<float>(data.pm2_5) - local_baseline.pm25) / fabsf(local_baseline.pm25);
-        if (dev > threshold) {
-            drift = true;
-            setReason("CALIB_DRIFT_PM25");
-        }
-    }
-
-    if (!drift && data.pms5003_ready && pms5003_base && hasFiniteValue(data.pm10) && local_baseline.pm10 != 0.0f) {
-        const float dev = fabsf(static_cast<float>(data.pm10) - local_baseline.pm10) / fabsf(local_baseline.pm10);
-        if (dev > threshold) {
-            drift = true;
-            setReason("CALIB_DRIFT_PM10");
         }
     }
 
